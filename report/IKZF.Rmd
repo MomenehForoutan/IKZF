@@ -1,0 +1,1568 @@
+---
+title: "IKZF ChIP-seq and RNA-seq data"
+author: Sepideh Foroutan and Joe Cursons
+output:
+  html_document:
+    toc: true
+    toc_depth: 4
+    toc_float: true
+    code_folding: hide
+    fig_width: 9
+    fig_height: 6
+params:
+  orig_date: "Date first generated: 11 Dec, 2019"
+  update_date: !r paste("Last updated on:", format(Sys.time(), '%d %B, %Y'))
+---
+
+
+`r params$orig_date`
+
+`r params$update_date`
+
+
+Read the data for RNA-seq as well as ChIP-seq.
+
+From Wil's analysis:
+
+"The list of IKZF1 target genes was derived using a combination two approaches. The first approach, MACS2, which looked at enriched binding to within 1kb of TSS regions of ChIP DNA relative to input DNA. As the number of direct targets identified varied between the biological triplicates, I’ve set a conservative cut-off for genes that were identified in every biological replicate.
+The second approach, CSAW, looked at differential binding to within 1kn of TSS regions between ChIP DNA from Cre control and IKZF1 KO. This list is shorter and has identified differential binding in both directions, though most of them are down in IKZF1 KO relative to Cre control. Again, using a conservative cut-off, I’ve only used target genes that show reduced binding.
+Overall, there are 111 gene targets that overlap between MACS2 and CSAW, 312 gene targets uniquely identified by MACS2 and 46 gene targets uniquely identified by CSAW. The four genes mentioned above were only identified by the MACS2 approach."
+
+From this paper for IKZF3: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4282578/
+
+"the expression of one member, Ikzf3, coincided precisely with NK-cell lineage commitment (Fig (Fig1A1A and B). Thereafter, Ikzf3 expression was maintained throughout bone marrow NK-cell development. In contrast, the best-characterized family member, Ikzf1, was similarly expressed in ALPs and all NK-cell fractions. A third family member, Ikzf2, was predominantly expressed at the earliest stages of NK-cell maturation before down-regulation in the mNK-cell fraction". 
+There are also DEGs for IKZF3 KO vs Cre in their suppl files: file:///Users/mfor0011/Downloads/embj0033-2721-sd1.pdf 
+
+
+From here in B cell development: https://www-nature-com.ezproxy.lib.monash.edu.au/articles/ni.2828
+
+"Ikaros-null (Ikzf1−/−) mice that lack the C-terminal zinc fingers fail to generate B lymphocytes, natural killer cells and fetal T cells but give rise to postnatal development of aberrant T cells"
+
+Some of the Plexin related genes are altered in B cell development using IKZF1. See figure 4. 
+
+from https://www.frontiersin.org/articles/10.3389/fimmu.2013.00014/full: 
+Ikaros null mice lack all B, T, and NK cells. Because Ikaros is expressed in NK cells and Ikaros null mice lack NK cells, it is currently widely postulated that Ikaros is an essential regulator of NK cell commitment.  as Ikaros regulates cytokine receptors that are important for the generation of CLPs such as CD135 
+
+Target genes in lymphoid leukemia: https://journals.plos.org/plosgenetics/article?id=10.1371/journal.pgen.1008280
+```{r}
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+
+chipPath <- "../data/ChIPseq/"
+rnaPath <- "../data/RNA-seq/"
+mainDir <- getwd()
+outPath <- "../output/"
+figPath <- "../figure/"
+dataPath <- "../data/"
+scriptPath <- "../script/"
+
+
+equal_breaks <- function(n = nBreak, s = scalingFactor, ...){
+  function(x){
+    # rescaling
+    d <- s * diff(range(x)) / (1+2*s)
+    round( seq(min(x)+d, max(x)-d, length=n), 2)
+  }
+}
+
+nBreak = 3
+scalingFactor = 0.05
+textSize <- 1.2
+
+# ifelse(!dir.exists(file.path(mainDir, outPath)), dir.create(file.path(mainDir, outPath)), FALSE)
+# ifelse(!dir.exists(file.path(mainDir, figPath)), dir.create(file.path(mainDir, figPath)), FALSE)
+# ifelse(!dir.exists(file.path(mainDir, dataPath)), dir.create(file.path(mainDir, dataPath)), FALSE)
+# ifelse(!dir.exists(file.path(mainDir, scriptPath)), dir.create(file.path(mainDir, scriptPath)), FALSE)
+```
+# Read RPKM values and ChIP-seq results
+```{r}
+csaw <- read.csv(
+  paste0(
+    chipPath,
+    "180510 DBsites IKZF1-WTvsKO annotatedToClosestGene_voom_consolidateWindowSizes.csv"
+  ),
+  stringsAsFactors = F
+)
+
+macs1 <- read.csv(
+  paste0(
+    chipPath,
+    "180510 MACS2 peakcalls IKZF1-WT AUTOext_R1.csv"
+  ),
+  stringsAsFactors = F
+)
+
+macs2 <- read.csv(
+  paste0(
+    chipPath,
+    "180510 MACS2 peakcalls IKZF1-WT AUTOext_R2.csv"
+  ),
+  stringsAsFactors = F
+)
+
+macs4 <- read.csv(
+  paste0(
+    chipPath,
+    "180510 MACS2 peakcalls IKZF1-WT AUTOext_R4.csv"
+  ),
+  stringsAsFactors = F
+)
+
+
+
+rpkm <- read.table(
+  paste0(
+    rnaPath,
+    "RPKM_DKO_IKZF1_IKZF3.txt"
+  ),
+  header = T, 
+  sep = "\t"
+)
+## remove dup columns
+rpkm <- rpkm[! duplicated(rpkm$external_gene_name), ]
+ex <- as.matrix(rpkm[, 4:ncol(rpkm)])
+row.names(ex) <- rpkm$external_gene_name
+
+ex <- log2(ex + 1)
+
+```
+
+
+```{r}
+annot_rna <- data.frame(SampleID = colnames(ex),
+                        Samples = stringr::str_remove( colnames(ex), "RPKM_"))
+
+annot_rna$Group <- stringr::str_remove(annot_rna$Samples, "_S[0-9]+")
+row.names(annot_rna) <- annot_rna$SampleID
+
+all(row.names(row.names(annot_rna)) == colnames(ex))
+
+annot_rna$Group <-
+  factor(annot_rna$Group,
+         levels = c("Cre", "IKZF1_KO", "IKZF3_KO", "IKZF3_IKZF1_KO"))
+
+```
+
+Original number of genes in CSAW: 259
+Common genes in different replicates using MACS: 589 genes [11 up direction]
+Common calls from CSAW and MACS2: there are 133 genes.
+CSAW only calls: 123
+MACS only calls: 456
+
+```{r}
+## common between three Reps in MACS
+macsCom <- Reduce(intersect, list(macs1$external_gene_name, 
+                                  macs2$external_gene_name,
+                                  macs4$external_gene_name))
+
+## common between MACS and CSAW
+comCalls <- intersect(csaw$external_gene_name, macsCom)
+
+## Method specific calls
+csawOnly <- unique(
+  csaw$external_gene_name[! csaw$external_gene_name %in% macsCom])
+macsOnly <- unique(
+  macsCom[! macsCom  %in% csaw$external_gene_name])
+```
+
+# Prepare data
+```{r}
+DE_DKO <-
+  read.table(
+    paste0(dataPath, "RNA-seq/DEstat_DKO_IKZF1_IKZF3_Cre.txt"),
+    header = T,
+    sep = "\t",
+    stringsAsFactors = F,
+    check.names = F
+  )
+
+DE_KO1 <-
+  read.table(
+    paste0(dataPath, "RNA-seq/DEstat_IKZF1_Cre.txt"),
+    header = T,
+    sep = "\t",
+    stringsAsFactors = F,
+    check.names = F
+  )
+
+DE_KO3 <-
+  read.table(
+    paste0(dataPath, "RNA-seq/DEstat_IKZF3_Cre.txt"),
+    header = T,
+    sep = "\t",
+    stringsAsFactors = F,
+    check.names = F
+  )
+```
+
+
+Define DEGs using p-values and logFCs
+```{r}
+DEGs_DKO <- DE_DKO %>% 
+  filter(abs(logFC) > 1 & adj.P.Val < 0.05) %>% 
+  data.frame()
+
+dim(DEGs_DKO)
+
+DEGs_KO1 <- DE_KO1 %>% 
+  filter(abs(logFC) > 1 & adj.P.Val < 0.05) %>% 
+  data.frame()
+
+dim(DEGs_KO1)
+
+DEGs_KO3 <- DE_KO3 %>% 
+  filter(abs(logFC) > 1 & adj.P.Val < 0.05) %>% 
+  data.frame()
+
+dim(DEGs_KO3)
+```
+
+
+Merge three DE stats together:
+```{r}
+colnames(DE_DKO)[-1] <- paste(colnames(DE_DKO)[-1], "DKO", sep = "_")
+colnames(DE_KO1)[-1] <- paste(colnames(DE_KO1)[-1], "KO1", sep = "_")
+colnames(DE_KO3)[-1] <- paste(colnames(DE_KO3)[-1], "KO3", sep = "_")
+
+
+DEstats <- Reduce(merge, list(DE_DKO, DE_KO1, DE_KO3))
+
+## remove some of the duplicated columns:
+rmcols <- c("external_gene_name_KO1",
+            "gene_biotype_KO1",
+            "AveExpr_KO1",
+            "external_gene_name_KO3",
+            "gene_biotype_KO3", 
+            "AveExpr_KO3")
+
+DEstats <- DEstats[, ! colnames(DEstats) %in% rmcols]
+
+colnames(DEstats)[2:3] <- c("Symbol", "Biotype")
+
+```
+
+```{r}
+## Add columns depending on whether or not a given gene is DEGs in the three comparions:
+
+DEstats$DEGs_group[!DEstats$ensembl_gene_id %in% DEGs_DKO$ensembl_gene_id &
+                     !DEstats$ensembl_gene_id %in% DEGs_KO1$ensembl_gene_id &
+                     !DEstats$ensembl_gene_id %in% DEGs_KO3$ensembl_gene_id] <-
+  "Non-DEGs"
+
+DEstats$DEGs_group[DEstats$ensembl_gene_id %in% DEGs_DKO$ensembl_gene_id &
+                     !DEstats$ensembl_gene_id %in% DEGs_KO1$ensembl_gene_id &
+                     !DEstats$ensembl_gene_id %in% DEGs_KO3$ensembl_gene_id] <-
+  "DEGs only in DKO"
+
+DEstats$DEGs_group[!DEstats$ensembl_gene_id %in% DEGs_DKO$ensembl_gene_id  &
+                     DEstats$ensembl_gene_id %in% DEGs_KO1$ensembl_gene_id  &
+                     !DEstats$ensembl_gene_id %in% DEGs_KO3$ensembl_gene_id] <-
+  "DEGs only in IKZF1 KO"
+
+DEstats$DEGs_group[!DEstats$ensembl_gene_id %in% DEGs_DKO$ensembl_gene_id  &
+                     !DEstats$ensembl_gene_id %in% DEGs_KO1$ensembl_gene_id  &
+                     DEstats$ensembl_gene_id %in% DEGs_KO3$ensembl_gene_id] <-
+  "DEGs only in IKZF3 KO"
+
+
+DEstats$DEGs_group[!DEstats$ensembl_gene_id %in% DEGs_DKO$ensembl_gene_id &
+                     DEstats$ensembl_gene_id %in% DEGs_KO1$ensembl_gene_id &
+                     DEstats$ensembl_gene_id %in% DEGs_KO3$ensembl_gene_id] <-
+  "DEGs in IKZF1 & IKZF3 KOs"
+
+DEstats$DEGs_group[DEstats$ensembl_gene_id %in% DEGs_DKO$ensembl_gene_id  &
+                     !DEstats$ensembl_gene_id %in% DEGs_KO1$ensembl_gene_id  &
+                     DEstats$ensembl_gene_id %in% DEGs_KO3$ensembl_gene_id] <-
+  "DEGs in DKO & IKZF3 KO"
+
+DEstats$DEGs_group[DEstats$ensembl_gene_id %in% DEGs_DKO$ensembl_gene_id &
+                     DEstats$ensembl_gene_id %in% DEGs_KO1$ensembl_gene_id  &
+                     !DEstats$ensembl_gene_id %in% DEGs_KO3$ensembl_gene_id] <-
+  "DEGs in DKO & IKZF1 KO"
+
+DEstats$DEGs_group[DEstats$ensembl_gene_id %in% DEGs_DKO$ensembl_gene_id  &
+                     DEstats$ensembl_gene_id %in% DEGs_KO1$ensembl_gene_id  &
+                     DEstats$ensembl_gene_id %in% DEGs_KO3$ensembl_gene_id] <-
+  "DEGs in all KOs"
+```
+
+Also add a column for the target genes from ChiP-seq
+```{r}
+DEstats$TargetGene <- "Non-Target gene"
+DEstats$TargetGene[DEstats$Symbol %in% comCalls] <-
+  "Target gene: both methods"
+DEstats$TargetGene[DEstats$Symbol %in% csawOnly] <-
+  "Target gene: only CSAW"
+DEstats$TargetGene[DEstats$Symbol %in% macsOnly] <-
+  "Target gene: only MACS2"
+```
+
+
+# QC
+## RLE plot
+sample S3 and S4 from IKZF3 KO seem to be different than the other two S1 and S2 samples. Similarly, S6 from DKO group seems to be different than the other three samples.
+```{r}
+source(paste0(scriptPath, "RLE_ggplot.R"))
+# pdf(paste0(figPath, "QC_RLE_logRPKM.pdf"), height = 6, width = 8)
+RLE_ggplot (
+  exprData = ex,
+  annot = annot_rna[, "Group", drop = F],
+  largeData = F,
+  textSize = 1,
+  ylim = c(-2, 2),
+  mainTitle = "",
+  cols = c(
+    brewer.pal(8, "Dark2")[-5],
+    brewer.pal(10, "Paired"),
+    brewer.pal(12, "Set3")
+  )
+)
+# dev.off()
+```
+
+## PCA
+```{r}
+source(paste0(scriptPath, "PCA_plot.R"))
+
+cols <- brewer.pal(8, "Dark2")[1:4]
+
+s <- svd(apply(ex ,
+  1,
+  function(x)
+  scale(x, scale = FALSE , center = TRUE)))  
+
+# pdf(paste0(figPath, "QC_PCA_logRPKM.pdf"), height = 8, width = 8)
+PCA_plot (
+  ex,
+  clin = annot_rna,
+  group_to_test = "Group",
+  svdResult = s,
+  plot_cex = 1,
+  legend_cex = 1,
+  labeled = FALSE,
+  group_to_shape = NULL,
+  cols = cols)
+# dev.off()
+```
+
+If I remove the two outliers
+```{r}
+badSamples <- c("RPKM_IKZF3_KO_S3", "RPKM_IKZF3_KO_S4" )
+ex2 <- ex[, ! colnames(ex) %in% badSamples]
+
+s <- svd(apply(ex2 ,
+  1,
+  function(x)
+  scale(x, scale = FALSE , center = TRUE)))  
+
+# pdf(paste0(figPath, "QC_PCA_logRPKM_rm2Samples.pdf"), height = 8, width = 8)
+PCA_plot (
+  ex2,
+  clin = annot_rna,
+  group_to_test = "Group",
+  svdResult = s,
+  plot_cex = 1,
+  legend_cex = 1,
+  labeled = FALSE,
+  group_to_shape = NULL,
+  cols = cols)
+# dev.off()
+```
+
+
+# Visualisation
+## Dotplots
+Look at the expression of these genes in the RNA-seq data.
+From 133 target genes (common between the two methods), 101 present in teh RPKM data...
+```{r}
+annotData <- annot_rna
+# annotData <- annot_rna[! row.names(annotData) %in% badSamples, ]
+
+gg <- comCalls
+gg <- gg[gg %in% row.names(ex)]
+
+ddgene <- data.frame(t(ex[gg, , drop = F]), annotData)
+# ddgene <- data.frame(t(ex[gg, !colnames(ex) %in% badSamples , drop = F]), annotData)
+
+currentTitle <- "Target genes common between the CSAW and MACS2 results"
+```
+
+
+```{r}
+library(tidyverse)
+library(RColorBrewer)
+
+
+ddLong <-
+  tidyr::pivot_longer(ddgene,
+                      1:length(gg),
+                      names_to = "Genes",
+                      values_to = "logRPKM")
+
+
+###-----
+equal_breaks <- function(n = nBreak, s = scalingFactor, ...){
+  function(x){
+    # rescaling
+    d <- s * diff(range(x)) / (1+2*s)
+    round( seq(min(x)+d, max(x)-d, length=n), 2)
+  }
+}
+
+nBreak = 3
+scalingFactor = 0.05
+textSize <- 1
+
+
+current_theme <-
+  theme_bw() +
+  theme(
+    strip.text = element_text(size = rel(textSize)),
+    panel.grid.minor = element_blank(),
+    axis.title = element_text(size = rel(textSize)),
+    axis.text.x = element_text(size = rel(textSize), angle = 45, hjust = 1 ),
+    axis.text.y = element_text(angle = 0,
+                               size = rel(textSize)),
+    axis.line = element_line(colour = "black"),
+    axis.ticks.x = element_blank(),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.margin = margin(unit(0, "cm")),
+    legend.title = element_text(size = rel(textSize), face = "italic"),
+    legend.text = element_text(size = rel(textSize)),
+    plot.title = element_text(
+      face = "bold",
+      size = rel(textSize),
+      hjust = 0.5
+    )
+  ) 
+
+
+numCol <- 8
+cols <- brewer.pal(8, "Dark2")[1:4]
+legendName <- "Group"
+
+
+p <-  ggplot(data = ddLong) +
+  geom_point(
+    aes_string(x = "Group",
+               y = "logRPKM",
+               text = "Samples",
+               color = "Group"),
+    position = position_dodge(width = 0.2),
+    width = 0.8,
+    alpha = 0.8,
+    # outlier.shape = NA
+    size = 1.2
+    # outlier.size = 0.2
+  ) +
+  facet_wrap( ~ Genes, ncol = numCol, scales = "free_y") +
+  # ylab("logExpr") +
+  xlab("") +
+  ggtitle(currentTitle) +
+  scale_color_manual(values = cols,
+                      name = legendName) +
+  scale_y_continuous(breaks = equal_breaks(n = nBreak, s = scalingFactor),
+                     expand = c(scalingFactor, 0)) +
+  current_theme
+
+# pdf(paste0(figPath, "Dotplot_Expr_Target_ComTwoMethods_rm2Samples.pdf"), height = 18, width = 15)
+# p
+# dev.off()
+
+
+# p_plotly <- plotly::ggplotly(
+#   p = p,
+#   tooltip = "text",
+#   width = 1600,
+#   height = 1800
+# )
+# 
+# htmlwidgets::saveWidget(p_plotly, paste0(figPath, "Dotplot_Expr_Target_ComTwoMethods_Interactive.html"))
+```
+
+## Heatmap of common target genes
+```{r}
+cols <- brewer.pal(8, "Dark2")[1:4]
+GroupCols <- cols
+names(GroupCols) <- levels(annotData$Group)
+colList <- list(Group = GroupCols)
+
+library(ComplexHeatmap)
+source("../script/plotHeatmapExpr.R")
+
+htmp <- plotHeatmapExpr(
+  genes = gg,
+  exprData = ex,
+  subsetSample = colnames(ex),
+  annotData = annotData,
+  annotColumns = c("Group"),
+  annotColList = colList,
+  geneAnnot = NULL,
+  ### one column data frame with "Genes" as column name
+  geneCol = NULL,
+  clustRows = T,
+  clustCols = T,
+  showRowNames = T,
+  showColNames = T,
+  textSize = 6,
+  plotTitle = "IKZF1 target genes obtained from\n two ChIP-seq analysis methods"
+)
+
+pdf(paste0(figPath, "Heatmap_Target_ComTwoMethods_rowNames.pdf"), width = 6, height = 12)
+draw(htmp)
+dev.off()
+```
+
+## Heatmaps of DEGs
+### DEGs in DKO vs Cre
+```{r}
+gg <- DEGs_DKO$external_gene_name
+
+currentColList <- list(Group = colList$Group[grepl("IKZF3_IKZF1_KO", names(colList$Group)) |
+                                grepl("Cre", names(colList$Group))])
+
+htmp <- plotHeatmapExpr(
+  genes = gg,
+  exprData = ex,
+  subsetSample = colnames(ex)[grepl("IKZF3_IKZF1_KO", colnames(ex)) |
+                                grepl("Cre", colnames(ex))],
+  heatmapCol = viridis::viridis(100),
+  annotData = annotData,
+  annotColumns = c("Group"),
+  annotColList = currentColList,
+  geneAnnot = NULL,
+  ### one column data frame with "Genes" as column name
+  geneCol = NULL,
+  clustRows = T,
+  clustCols = T,
+  showRowNames = F,
+  showColNames = F,
+  textSize = 12,
+  plotTitle = "DEGs: DKO vs Cre (n = 1768)"
+)
+
+pdf(paste0(figPath, "Heatmap_DEGs_DKO_Cre.pdf"), width = 6, height = 8)
+draw(htmp)
+dev.off()
+```
+
+### DEGs in IKZF1 vs Cre
+```{r}
+gg <- DEGs_KO1$external_gene_name
+
+currentColList <- list(Group = colList$Group[grepl("^IKZF1_KO", names(colList$Group)) |
+                                grepl("Cre", names(colList$Group))])
+
+htmp <- plotHeatmapExpr(
+  genes = gg,
+  exprData = ex,
+  subsetSample = colnames(ex)[grepl("RPKM_IKZF1_KO", colnames(ex)) |
+                                grepl("Cre", colnames(ex))],
+  heatmapCol = viridis::viridis(100),
+  annotData = annotData,
+  annotColumns = c("Group"),
+  annotColList = currentColList,
+  geneAnnot = NULL,
+  ### one column data frame with "Genes" as column name
+  geneCol = NULL,
+  clustRows = T,
+  clustCols = T,
+  showRowNames = F,
+  showColNames = F,
+  textSize = 12,
+  plotTitle = "DEGs: Ikzf1 KO vs Cre (n = 1057)"
+)
+
+pdf(paste0(figPath, "Heatmap_DEGs_IKZF1_Cre.pdf"), width = 6, height = 8)
+draw(htmp)
+dev.off()
+```
+
+### DEGs in IKZF3 vs Cre
+```{r}
+gg <- DEGs_KO3$external_gene_name
+
+currentColList <- list(Group = colList$Group[grepl("^IKZF3_KO", names(colList$Group)) |
+                                grepl("Cre", names(colList$Group))])
+
+htmp <- plotHeatmapExpr(
+  genes = gg,
+  exprData = ex,
+  subsetSample = colnames(ex)[grepl("RPKM_IKZF3_KO", colnames(ex)) |
+                                grepl("Cre", colnames(ex))],
+  heatmapCol = viridis::viridis(100),
+  annotData = annotData,
+  annotColumns = c("Group"),
+  annotColList = currentColList,
+  geneAnnot = NULL,
+  ### one column data frame with "Genes" as column name
+  geneCol = NULL,
+  clustRows = T,
+  clustCols = T,
+  showRowNames = F,
+  showColNames = F,
+  textSize = 12,
+  plotTitle = "DEGs: Ikzf3 KO vs Cre (n = 763)"
+)
+
+pdf(paste0(figPath, "Heatmap_DEGs_IKZF3_Cre.pdf"), width = 6, height = 8)
+draw(htmp)
+dev.off()
+```
+
+
+### DEGs Common between IKZF1 vs DKO
+```{r}
+gg <- intersect(DEGs_DKO$external_gene_name, DEGs_KO1$external_gene_name)
+
+currentColList <- list(Group = colList$Group[names(colList$Group) != "IKZF3_KO"])
+
+htmp <- plotHeatmapExpr(
+  genes = gg,
+  exprData = ex,
+  subsetSample = colnames(ex)[ ! grepl("RPKM_IKZF3_KO", colnames(ex))],
+  heatmapCol = viridis::viridis(100),
+  annotData = annotData,
+  annotColumns = c("Group"),
+  annotColList = currentColList,
+  annotLegened_ncol = 1,
+  geneAnnot = NULL,
+  ### one column data frame with "Genes" as column name
+  geneCol = NULL,
+  clustRows = T,
+  clustCols = T,
+  showRowNames = F,
+  showColNames = F,
+  heatmapLegendTitle = "Scaled logRPKM",
+  textSize = 12,
+  plotTitle = "DEGs common between \nIkzf1 KO vs Cre and DKO vs Cre (n = 636)"
+)
+
+pdf(paste0(figPath, "Heatmap_DEGsCommon_IKZF1_DKO.pdf"), width = 6, height = 7)
+draw(htmp)
+dev.off()
+```
+
+### DEGs Common between IKZF3 vs DKO
+```{r}
+gg <- intersect(DEGs_DKO$external_gene_name, DEGs_KO3$external_gene_name)
+
+currentColList <- list(Group = colList$Group[names(colList$Group) != "IKZF1_KO"])
+
+htmp <- plotHeatmapExpr(
+  genes = gg,
+  exprData = ex,
+  subsetSample = colnames(ex)[ ! grepl("RPKM_IKZF1_KO", colnames(ex))],
+  heatmapCol = viridis::viridis(100),
+  annotData = annotData,
+  annotColumns = c("Group"),
+  annotColList = currentColList,
+  annotLegened_ncol = 1,
+  geneAnnot = NULL,
+  ### one column data frame with "Genes" as column name
+  geneCol = NULL,
+  clustRows = T,
+  clustCols = T,
+  showRowNames = F,
+  showColNames = F,
+  heatmapLegendTitle = "Scaled logRPKM",
+  textSize = 12,
+  plotTitle = "DEGs common between \nIkzf3 KO vs Cre and DKO vs Cre (n = 369)"
+)
+
+pdf(paste0(figPath, "Heatmap_DEGsCommon_IKZF3_DKO.pdf"), width = 6, height = 7)
+draw(htmp)
+dev.off()
+```
+
+### DEGs Common across all KOs
+```{r}
+gg <- Reduce(intersect, list(DEGs_DKO$external_gene_name,
+                             DEGs_KO3$external_gene_name,
+                             DEGs_KO1$external_gene_name))
+
+currentColList <- colList
+
+htmp <- plotHeatmapExpr(
+  genes = gg,
+  exprData = ex,
+  subsetSample = colnames(ex),
+  heatmapCol = viridis::viridis(100),
+  annotData = annotData,
+  annotColumns = c("Group"),
+  annotColList = currentColList,
+  annotLegened_ncol = 1,
+  geneAnnot = NULL,
+  ### one column data frame with "Genes" as column name
+  geneCol = NULL,
+  clustRows = T,
+  clustCols = T,
+  showRowNames = F,
+  showColNames = F,
+  heatmapLegendTitle = "Scaled logRPKM",
+  textSize = 12,
+  plotTitle = "DEGs common between all comparisons (n = 165)"
+)
+
+pdf(paste0(figPath, "Heatmap_DEGsCommon_AllKOs.pdf"), width = 6, height = 7)
+draw(htmp)
+dev.off()
+```
+
+## logFC plots
+
+### IKZF1 vs IKZF3 logFCs
+```{r}
+currentcol <- c(brewer.pal(9, "Set1")[-6])
+
+pDEGs <- DEstats %>%
+  filter(DEGs_group != "Non-DEGs") %>%
+  ggplot(., aes(logFC_KO1, logFC_KO3, color = DEGs_group, text = Symbol)) +
+  geom_point(alpha = 0.5, size = 0.9) +
+  scale_color_manual(values = currentcol) +
+  theme_bw()
+
+pDEGsIntr <- plotly::ggplotly(pDEGs, tooltips = "text")
+
+htmlwidgets::saveWidget(
+  widget = pDEGsIntr, 
+  file = paste0(figPath, "logFC_IKZF1_IKZF3_allDEGs_colorDEGsGroups.html"))
+
+
+pTarget <- DEstats %>%
+  filter(DEGs_group != "Non-DEGs") %>%
+  arrange(TargetGene) %>%
+  ggplot(., aes(logFC_KO1, logFC_KO3, color = TargetGene, text = Symbol)) +
+  geom_point(alpha = 0.5, size = 0.9) +
+  scale_color_manual(values = currentcol[c(8, 1, 2, 3)]) +
+  theme_bw()
+
+pTargetIntr <- plotly::ggplotly(pTarget, tooltips = "text")
+
+htmlwidgets::saveWidget(
+  widget = pTargetIntr, 
+  file = paste0(figPath, "logFC_IKZF1_IKZF3_allDEGs_colorTargetGenes.html"))
+```
+
+
+### IKZF1 vs DKO logFCs
+```{r}
+currentcol <- c(brewer.pal(9, "Set1")[-6])
+
+pDEGs <- DEstats %>%
+  filter(DEGs_group != "Non-DEGs") %>%
+  ggplot(., aes(logFC_KO1, logFC_DKO, color = DEGs_group, text = Symbol)) +
+  geom_point(alpha = 0.5, size = 0.9) +
+  scale_color_manual(values = currentcol) +
+  theme_bw()
+
+pDEGsIntr <- plotly::ggplotly(pDEGs, tooltips = "text")
+
+htmlwidgets::saveWidget(
+  widget = pDEGsIntr, 
+  file = paste0(figPath, "logFC_IKZF1_DKO_allDEGs_colorDEGsGroups.html"))
+
+
+pTarget <- DEstats %>%
+  filter(DEGs_group != "Non-DEGs") %>%
+  arrange(TargetGene) %>%
+  ggplot(., aes(logFC_KO1, logFC_DKO, color = TargetGene, text = Symbol)) +
+  geom_point(alpha = 0.5, size = 0.9) +
+  scale_color_manual(values = currentcol[c(8, 1, 2, 3)]) +
+  theme_bw()
+
+pTargetIntr <- plotly::ggplotly(pTarget, tooltips = "text")
+
+htmlwidgets::saveWidget(
+  widget = pTargetIntr, 
+  file = paste0(figPath, "logFC_IKZF1_DKO_allDEGs_colorTargetGenes.html"))
+```
+
+
+### IKZF3 vs DKO logFCs
+```{r}
+currentcol <- c(brewer.pal(9, "Set1")[-6])
+
+pDEGs <- DEstats %>%
+  filter(DEGs_group != "Non-DEGs") %>%
+  ggplot(., aes(logFC_KO3, logFC_DKO, color = DEGs_group, text = Symbol)) +
+  geom_point(alpha = 0.5, size = 0.9) +
+  scale_color_manual(values = currentcol) +
+  theme_bw()
+
+pDEGsIntr <- plotly::ggplotly(pDEGs, tooltips = "text")
+
+htmlwidgets::saveWidget(
+  widget = pDEGsIntr, 
+  file = paste0(figPath, "logFC_IKZF3_DKO_allDEGs_colorDEGsGroups.html"))
+
+
+pTarget <- DEstats %>%
+  filter(DEGs_group != "Non-DEGs") %>%
+  arrange(TargetGene) %>%
+  ggplot(., aes(logFC_KO3, logFC_DKO, color = TargetGene, text = Symbol)) +
+  geom_point(alpha = 0.5, size = 0.9) +
+  scale_color_manual(values = currentcol[c(8, 1, 2, 3)]) +
+  theme_bw()
+
+pTargetIntr <- plotly::ggplotly(pTarget, tooltips = "text")
+
+htmlwidgets::saveWidget(
+  widget = pTargetIntr, 
+  file = paste0(figPath, "logFC_IKZF3_DKO_allDEGs_colorTargetGenes.html"))
+```
+
+# Target genes that are among DEGs
+There are 61 target genes that are among DEGs, including the four IKZF1-4. We remove Ikzf5 because it is not target genes and it is not DEGs.
+```{r}
+DEGs_target <- DEstats %>% 
+  filter((DEGs_group != "Non-DEGs" & 
+           TargetGene != "Non-Target gene") | 
+           grepl("Ikzf", Symbol)) %>% 
+  filter(Symbol != "Ikzf5") %>% 
+  data.frame()
+
+## remove two duplciated symbols:
+# DEGs_target <- DEGs_target[! duplicated(DEGs_target$Symbol) & DEGs_target$Symbol != "Ikzf5", ]
+
+rownames(DEGs_target) <- DEGs_target$Symbol
+```
+
+## Heatmap of logFCs
+```{r}
+library(tidyverse)
+library(viridis)
+source(paste0(scriptPath, "plotHeatmapExpr.R"))
+
+cc <- DEGs_target %>%
+  rownames_to_column('geneRows') %>%
+  select(logFC_DKO, logFC_KO1, logFC_KO3, DEGs_group, TargetGene, geneRows, Symbol) %>%
+  rename(Genes = DEGs_group) %>%
+  column_to_rownames('geneRows')
+
+geneAnnotData <- cc[, "Genes", drop = F]
+geneColours <- brewer.pal(10, "Paired")[c(6, 1, 3, 5, 8, 2, 4 )]
+names(geneColours) <- unique(geneAnnotData$Genes)[order(unique(geneAnnotData$Genes))]
+  
+  
+for(t in unique(cc$TargetGene[cc$TargetGene != "Non-Target gene"])){
+  dd <- cc[cc$TargetGene == t | cc$TargetGene == "Non-Target gene", ]
+  currentT <- stringr::str_remove(t, "^Target gene: ")
+  
+  pdf(paste0(figPath, "Heatmap_TargetGenes_", currentT, "_DEGs_noClust.pdf"), height = 9, width = 5)
+  
+  # for(g in unique(dd$DEGs_group)) {
+  # currentData <- dd[dd$DEGs_group == g | grepl("Ikzf", dd$Symbol), ]
+  currentGenes <- dd$Symbol
+  currentGeneAnnotData <- dd[, "Genes", drop = F]
+  currentGeneColours <- geneColours[names(geneColours) %in% currentGeneAnnotData$Genes]
+  
+  plotData <- dd[, c('logFC_DKO', 'logFC_KO1', 'logFC_KO3')]
+  minVal <- min(plotData)
+  maxVal <- max(plotData)
+  
+
+  
+  plotHeatmapExpr(
+    exprData = plotData,
+    heatmapCol = circlize::colorRamp2(
+      c(minVal, 0, maxVal), 
+      c(rev(viridis(100))[1] , "white" , rev(viridis(100))[100])),
+    # heatmapCol = rev(viridis(100)),
+    genes = currentGenes,
+    subsetSample = NULL,
+    annotData = NULL, 
+    annotColumns = NULL,
+    annotColList = NULL, 
+    scaleData = F,
+    geneAnnot = geneAnnotData,
+    geneCol = geneColours,
+    clustRows = T,
+    clustCols = F,
+    showRowNames = T,
+    showColNames = T, 
+    textSize = 9,
+    heatmapLegendTitle = "logFC",
+    plotTitle = paste0("logFCs of Target genes: ", currentT)
+    # plotTitle = paste0("logFCs of Target genes: ", currentT, "\n" , g)
+  )
+  # }
+  dev.off()
+}
+
+```
+
+## Heatmap of common DEGs
+There are 165 DEGs in all comparisons, of which 5 are amongs the taget genes.
+
+```{r}
+DEGsAll <- DEstats[DEstats$DEGs_group == "DEGs in all KOs", ]
+
+table(DEGsAll$TargetGene)
+DEGsAll[! DEGsAll$TargetGene == "Non-Target gene", ]
+
+# DEGsAllLogFC <- DEGsAll[, c("Symbol", grep("logFC", colnames(DEGsAll), value = T))]
+
+DEGsAllLogFCLong <- 
+  DEGsAll %>% 
+  select(c("Symbol", grep("logFC", colnames(DEGsAll), value = T))) %>% 
+  # DEGsAllLogFC %>%
+  mutate(Direction = case_when((logFC_DKO > 0 &
+                                  logFC_KO1 > 0 & logFC_KO3 > 0) |
+                                 (logFC_DKO < 0 &
+                                    logFC_KO1 < 0 &
+                                    logFC_KO3 < 0) ~ "Consistent",
+                               TRUE ~ "Different"
+  )) %>%
+  pivot_longer(
+    data = . ,
+    names_to = "Group",
+    values_to = "logFC",
+    cols = 2:4
+  ) %>%
+  data.frame()
+
+
+
+pdf(paste0(figPath, "WaterFall_logFCs_DEGs_allKOs.pdf"), height = 7, width = 25)
+DEGsAllLogFCLong %>%
+  # filter(Direction == "Different") %>%
+  ggplot(., aes(
+    x = reorder(Symbol, logFC),
+    y = logFC,
+    fill = Direction
+  )) +
+  geom_bar(stat = "identity") +
+  facet_wrap(. ~ Group, ncol = 1) +
+  # scale_fill_manual(values = brewer.pal(9, "Set1")[c(4)]) +
+  scale_fill_manual(values = brewer.pal(9, "Set1")[c(9, 4)]) +
+  theme_bw() +
+  ggtitle("Genes that are DE in all three comparisons") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title.x = element_blank())
+dev.off()
+```
+
+# IKZF3 KO DEGs are IKZF1 targets
+
+## Waterplot
+```{r}
+# DEstatDEGs_IKZF3 <- DEstats[grepl("IKZF3", DEstats$DEGs_group) | DEstats$DEGs_group == "DEGs in all KOs", ]
+# 
+# DEGs_IKZF3_targetIKZF1 <- DEstatDEGs_IKZF3[DEstatDEGs_IKZF3$TargetGene != "Non-Target gene", ]
+
+ikzfGenes <- c("Ikzf1", 
+               "Ikzf2", 
+               "Ikzf3", 
+               "Ikzf4")
+
+
+DEstats %>% 
+  filter((grepl("IKZF3", DEGs_group) | 
+            DEGs_group == "DEGs in all KOs") &
+           TargetGene != "Non-Target gene" |
+           Symbol %in% ikzfGenes) %>% 
+  select(c("Symbol", grep("logFC", colnames(DEGsAll), value = T))) %>%
+  # DEGsAllLogFC %>%
+  mutate(Direction = case_when((logFC_DKO > 0 &
+                                  logFC_KO1 > 0 & logFC_KO3 > 0) |
+                                 (logFC_DKO < 0 &
+                                    logFC_KO1 < 0 &
+                                    logFC_KO3 < 0) ~ "Consistent",
+                               TRUE ~ "Different"
+  )) %>%
+  pivot_longer(
+    data = . ,
+    names_to = "Group",
+    values_to = "logFC",
+    cols = 2:4
+  ) %>%
+  ggplot(., aes(
+    x = reorder(Symbol, logFC),
+    y = logFC,
+    fill = Direction
+  )) +
+  geom_bar(stat = "identity") +
+  facet_wrap(. ~ Group, ncol = 1) +
+  # scale_fill_manual(values = brewer.pal(9, "Set1")[c(4)]) +
+  scale_fill_manual(values = brewer.pal(9, "Set1")[c(9, 4)]) +
+  ggtitle("DEGs from Ikzf3 KO that are target genes of the Ikzf1") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title.x = element_blank())
+
+ggsave(filename = "WaterFall_DEGsIKZF3_TargetGeneIKZF1.pdf", device = "pdf", path = figPath, width = 8, height = 7)
+```
+
+
+
+# IKZF1 KO DEGs that are IKZF1 targets
+
+## Waterplot
+```{r}
+# DEstatDEGs_IKZF1 <- DEstats[grepl("IKZF1", DEstats$DEGs_group) | DEstats$DEGs_group == "DEGs in all KOs", ]
+# 
+# DEGs_IKZF1_targetIKZF1 <- DEstatDEGs_IKZF1[DEstatDEGs_IKZF1$TargetGene != "Non-Target gene", ]
+
+ikzfGenes <- c("Ikzf1", 
+               "Ikzf2", 
+               "Ikzf3", 
+               "Ikzf4")
+
+DEstats %>% 
+  filter((grepl("IKZF1", DEGs_group) | 
+            DEGs_group == "DEGs in all KOs") &
+           TargetGene != "Non-Target gene" |
+           Symbol %in% ikzfGenes) %>% 
+  select(c("Symbol", grep("logFC", colnames(DEGsAll), value = T))) %>%
+  # DEGsAllLogFC %>%
+  mutate(Direction = case_when((logFC_DKO > 0 &
+                                  logFC_KO1 > 0 & logFC_KO3 > 0) |
+                                 (logFC_DKO < 0 &
+                                    logFC_KO1 < 0 &
+                                    logFC_KO3 < 0) ~ "Consistent",
+                               TRUE ~ "Different"
+  )) %>%
+  pivot_longer(
+    data = . ,
+    names_to = "Group",
+    values_to = "logFC",
+    cols = 2:4
+  ) %>%
+  ggplot(., aes(
+    x = reorder(Symbol, logFC),
+    y = logFC,
+    fill = Direction
+  )) +
+  geom_bar(stat = "identity") +
+  facet_wrap(. ~ Group, ncol = 1) +
+  # scale_fill_manual(values = brewer.pal(9, "Set1")[c(4)]) +
+  scale_fill_manual(values = brewer.pal(9, "Set1")[c(9, 4)]) +
+  ggtitle("DEGs from Ikzf1 KO that are target genes of the Ikzf1") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title.x = element_blank())
+
+ggsave(filename = "WaterFall_DEGsIKZF1_TargetGeneIKZF1.pdf", device = "pdf", path = figPath, width = 8, height = 7)
+```
+
+# DEGs common between DKO and IKZF1 KO
+DEGs overlapping between the DKO and KO1, IKZF1 is gone, which ones are known IKZF1 targets, and what happens for them in IKZF3? 
+
+```{r}
+DEGsCom_DKO_KO1 <- intersect(DEGs_DKO$external_gene_name, DEGs_KO1$external_gene_name)
+DEGsCom_DKO_KO1_target <- c(
+  intersect(DEGsCom_DKO_KO1, comCalls),
+  intersect(DEGsCom_DKO_KO1, csawOnly),
+  intersect(DEGsCom_DKO_KO1, macsOnly))
+                            
+
+DEstats %>%
+  filter(Symbol %in% DEGsCom_DKO_KO1_target | Symbol %in% ikzfGenes) %>% 
+  select(c("Symbol", grep("logFC", colnames(DEGsAll), value = T))) %>%
+  # DEGsAllLogFC %>%
+  mutate(Direction = case_when((logFC_DKO > 0 &
+                                  logFC_KO1 > 0 & logFC_KO3 > 0) |
+                                 (logFC_DKO < 0 &
+                                    logFC_KO1 < 0 &
+                                    logFC_KO3 < 0) ~ "Consistent",
+                               TRUE ~ "Different"
+  )) %>%
+  pivot_longer(
+    data = . ,
+    names_to = "Group",
+    values_to = "logFC",
+    cols = 2:4
+  ) %>%
+  ggplot(., aes(
+    x = reorder(Symbol, logFC),
+    y = logFC,
+    fill = Direction
+  )) +
+  geom_bar(stat = "identity") +
+  facet_wrap(. ~ Group, ncol = 1) +
+  # scale_fill_manual(values = brewer.pal(9, "Set1")[c(4)]) +
+  scale_fill_manual(values = brewer.pal(9, "Set1")[c(9, 4)]) +
+  ggtitle("DEGs common between Ikzf1 and DKO, which are also target genes of the Ikzf1") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title.x = element_blank())
+
+ggsave(filename = "WaterFall_DEGsCommon_DKO_IKZF1_TargetGeneIKZF1.pdf", device = "pdf", path = figPath, width = 8, height = 7)
+
+```
+
+
+# DEGs up in IKZF3 KO but not up in other comparisons
+I do not think this is a correct way of looking at this... because DEGs that are up-regulated after KO3, are not necessary going up due to KO1, but instead a lot of them goes up because we have KO3...
+```{r}
+ko3_pos <- DEstats %>%
+  filter(logFC_KO3 > 0 & logFC_KO1 < 0 & logFC_DKO < 0 & grepl("IKZF3", DEGs_group))
+
+currentcol <- c(brewer.pal(9, "Set1")[-6])
+names(currentcol) <- unique(DEstats$DEGs_group)
+
+##-------- plot KO3 vs DKO
+p_poslogFC_KO3_DKO <- ko3_pos %>% 
+  ggplot(., aes(logFC_KO3, logFC_DKO, color = DEGs_group, text = Symbol)) +
+  geom_point(alpha = 0.5, size = 0.9) +
+  scale_color_manual(values = currentcol) +
+  theme_bw()
+
+pIntr_poslogFC_KO3_DKO <- plotly::ggplotly(p_poslogFC_KO3_DKO, tooltips = "text")
+
+htmlwidgets::saveWidget(
+  widget = pIntr_poslogFC_KO3_DKO, 
+  file = paste0(figPath, "logFC_IKZF3_DKO_PosLogFC_inIKZF3_NegLogFC_inIKZF1andDKO.html"))
+
+
+##----- plot KO3 vs KO1
+p_poslogFC_KO3_KO1 <- ko3_pos %>% 
+  ggplot(., aes(logFC_KO3, logFC_KO1, color = DEGs_group, text = Symbol)) +
+  geom_point(alpha = 0.5, size = 0.9) +
+  scale_color_manual(values = currentcol) +
+  theme_bw()
+
+pIntr_poslogFC_KO3_KO1 <- plotly::ggplotly(p_poslogFC_KO3_KO1, tooltips = "text")
+
+htmlwidgets::saveWidget(
+  widget = pIntr_poslogFC_KO3_KO1, 
+  file = paste0(figPath, "logFC_IKZF3_IKZF1_PosLogFC_inIKZF3_NegLogFC_inIKZF1andDKO.html"))
+
+```
+
+
+# Find genes correlated with IKZF
+## Correlation of target genes with IKZF1
+```{r}
+textSize <- 1.2
+ikzfGenes <- c("Ikzf1", 
+               "Ikzf2", 
+               "Ikzf3", 
+               "Ikzf4")
+
+## 471 genes
+targetGenes <- DEstats$Symbol[DEstats$TargetGene != "Non-Target gene"]
+exprCre <- t(ex[, grepl("Cre", colnames(ex))])
+
+exprCreTarget <- exprCre[, colnames(exprCre) %in% targetGenes |
+                           colnames(exprCre) %in% ikzfGenes]
+
+
+corVals <- sapply(colnames(exprCreTarget)[2:ncol(exprCreTarget)], function(x){
+  # currentData <- exprCreTarget[, c(x, "Ikzf")]
+  cc <- cor.test(exprCreTarget[, x], exprCreTarget[,"Ikzf1"], method = "spearman" )[[4]]
+  return(cc)
+})
+
+names(corVals) <- colnames(exprCreTarget)[2:ncol(exprCreTarget)]
+posCor1 <- names(corVals[corVals >= 0.8])
+negCor1 <- names(corVals[corVals <= -0.8])
+
+posData1 <- exprCreTarget[, c("Ikzf1", posCor1)]
+negData1 <- exprCreTarget[, c("Ikzf1", negCor1)]
+
+pPos1 <- list()
+for(i in colnames(posData1)){
+  xcol <- paste0("`", i, "`")
+  ycol <- "`Ikzf1`"
+  pPos1[[i]] <- ggplot(data = data.frame(posData1, check.names = F),
+                   aes_string(x = xcol, y = ycol)) +
+    geom_point() + 
+    geom_smooth(method = "lm") +
+    DEGreport::geom_cor(size = 3) +
+    theme_bw() +
+    scale_x_continuous(breaks = equal_breaks(n = nBreak, s = scalingFactor),
+                       expand = c(scalingFactor, 0)) +
+    scale_y_continuous(breaks = equal_breaks(n = nBreak, s = scalingFactor),
+                       expand = c(scalingFactor, 0)) +
+    theme(
+    axis.title = element_text(size = rel(textSize)),
+    axis.text = element_text(angle = 0, size = rel(textSize)))
+}
+
+pdf(
+  paste0(figPath, "Scatterplot_IKZF1Targets_IKZF1Expr_Cre_PosCor.pdf"),
+  height = 18,
+  width = 23
+)
+do.call(gridExtra::grid.arrange, pPos1[1:62])
+do.call(gridExtra::grid.arrange, pPos1[63:124])
+dev.off()
+
+# pdf(paste0(figPath, "Scatterplot_IKZF1Targets_IKZF1Expr_Cre.pdf"), height = 24, width = 30)
+# do.call(gridExtra::grid.arrange, p[1:95])
+# do.call(gridExtra::grid.arrange, p[96:190])
+# do.call(gridExtra::grid.arrange, p[191:285])
+# do.call(gridExtra::grid.arrange, p[286:380])
+# do.call(gridExtra::grid.arrange, p[381:475])
+# dev.off()
+```
+
+## Correlation of target genes with IKZF3
+```{r}
+
+corVals <- sapply(colnames(exprCreTarget)[colnames(exprCreTarget) != "Ikzf3"], function(x){
+  # currentData <- exprCreTarget[, c(x, "Ikzf")]
+  cc <- cor.test(exprCreTarget[, x], exprCreTarget[,"Ikzf3"], method = "spearman" )[[4]]
+  return(cc)
+})
+
+names(corVals) <- colnames(exprCreTarget)[colnames(exprCreTarget) != "Ikzf3"]
+posCor3 <- names(corVals[corVals >= 0.8])
+negCor3 <- names(corVals[corVals <= -0.8])
+
+posData3 <- exprCreTarget[, c("Ikzf3", posCor3)]
+negData3 <- exprCreTarget[, c("Ikzf3", negCor3)]
+
+textSize <- 1.3
+
+
+pPos3 <- list()
+for(i in colnames(posData3)){
+  xcol <- paste0("`", i, "`")
+  ycol <- "`Ikzf3`"
+  pPos3[[i]] <- ggplot(data = data.frame(posData3, check.names = F),
+                   aes_string(x = xcol, y = ycol)) +
+    geom_point() + 
+    geom_smooth(method = "lm") +
+    DEGreport::geom_cor(size = 3) +
+    theme_bw() +
+    scale_x_continuous(breaks = equal_breaks(n = nBreak, s = scalingFactor),
+                       expand = c(scalingFactor, 0)) +
+    scale_y_continuous(breaks = equal_breaks(n = nBreak, s = scalingFactor),
+                       expand = c(scalingFactor, 0))  +
+    theme(
+    axis.title = element_text(size = rel(textSize)),
+    axis.text = element_text(angle = 0, size = rel(textSize)))
+}
+
+pdf(
+  paste0(figPath, "Scatterplot_IKZF1Targets_IKZF3Expr_Cre_PosCor.pdf"),
+  height = 18,
+  width = 22
+)
+do.call(gridExtra::grid.arrange, pPos3[1:53])
+do.call(gridExtra::grid.arrange, pPos3[54:107])
+dev.off()
+
+
+# pdf(paste0(figPath, "Scatterplot_IKZF1Targets_IKZF3Expr_Cre.pdf"), height = 24, width = 30)
+# do.call(gridExtra::grid.arrange, p[1:95])
+# do.call(gridExtra::grid.arrange, p[96:190])
+# do.call(gridExtra::grid.arrange, p[191:285])
+# do.call(gridExtra::grid.arrange, p[286:380])
+# do.call(gridExtra::grid.arrange, p[381:475])
+# dev.off()
+```
+
+
+
+
+## Correlation of genes with IKZF1 in Cre and IKZF3 KO
+```{r}
+textSize <- 1.5
+currentTheme <- theme_bw() +
+    theme(
+    axis.title = element_text(size = rel(textSize)),
+    axis.text = element_text(angle = 0, size = rel(textSize)),
+    # strip.background = element_rect(colour = "#f0f0f0", fill = "#f0f0f0"),
+    strip.text = element_text(size = rel(textSize)),
+    axis.line = element_line(colour = "black", size = 0.5),
+        legend.title = element_text(size = rel(textSize), face = "italic"),
+    legend.text=element_text(size = rel(textSize)),
+    legend.key.size = unit(1, 'lines'),  ## increase the line space
+    plot.title = element_text(
+      face = "bold",
+      size = rel(textSize),
+      hjust = 0.5
+    ))
+```
+
+### Genes positively correlated with IKZF1 in Cre and IKZF3 KO
+```{r}
+
+exprCreKO3 <- t(ex[, grepl("Cre", colnames(ex)) | grepl("IKZF3_KO", colnames(ex))])
+
+corVals <- sapply(colnames(exprCreKO3)[colnames(exprCreKO3) != "Ikzf1"], function(x){
+  # currentData <- exprCreTarget[, c(x, "Ikzf")]
+  cc <- cor.test(exprCreKO3[, x], exprCreKO3[,"Ikzf1"], method = "spearman" )[[4]]
+  return(cc)
+})
+
+names(corVals) <- colnames(exprCreKO3)[colnames(exprCreKO3) != "Ikzf1"]
+corVals <- corVals[complete.cases(corVals)]
+
+posCor <- names(corVals[corVals >= 0.9])
+negCor <- names(corVals[corVals <= -0.9])
+
+posData <- data.frame(exprCreKO3[, c("Ikzf1", posCor)], 
+                      Group = c(rep("IKZF3_KO", 4), rep("Cre", 4)), 
+                      check.names = F) %>% 
+  rename(Mar5 = `Mar-05`)
+
+
+
+pPos <- posData %>%
+  pivot_longer(
+    data = . ,
+    names_to = "Genes",
+    values_to = "logRPKM",
+    cols = 2:(ncol(.) - 1)
+  ) %>%
+  ggplot(data = .,
+         aes(x = logRPKM, y = Ikzf1, color = Group)) +
+  geom_point(size = 2, alpha = 0.8) +
+  facet_wrap( ~ Genes, scale = "free") +
+  geom_smooth(aes(group = 1),
+              method = "lm",
+              fullrange = TRUE) +
+  DEGreport::geom_cor(aes(group = 1), size = 4) +
+  scale_color_manual(values = brewer.pal(4, "Set1")[3:4]) +
+  ggtitle("Genes positively correlated with Ikzf1 expression in Cre and Ikzf3 KO subset") +
+  scale_x_continuous(breaks = equal_breaks(n = nBreak, s = scalingFactor),
+                     expand = c(scalingFactor, 0)) +
+  scale_y_continuous(breaks = equal_breaks(n = nBreak, s = scalingFactor),
+                     expand = c(scalingFactor, 0))  +
+  currentTheme
+    
+
+
+
+pdf(
+  paste0(figPath, "Scatterplot_Cor_IKZF1_OtherGenes_CreKO3_PosCor2.pdf"),
+  height = 22,
+  width = 30
+)
+pPos
+dev.off()
+
+```
+
+### Genes negatively correlated with IKZF1 in Cre and IKZF3 KO
+```{r}
+
+negData <- data.frame(exprCreKO3[, c("Ikzf1", negCor)], 
+                      Group = c(rep("IKZF3_KO", 4), rep("Cre", 4)), 
+                      check.names = F) 
+
+
+
+pNeg <- negData %>%
+  pivot_longer(
+    data = . ,
+    names_to = "Genes",
+    values_to = "logRPKM",
+    cols = 2:(ncol(.) - 1)
+  ) %>%
+  ggplot(data = .,
+         aes(x = logRPKM, y = Ikzf1, color = Group)) +
+  geom_point(size = 2, alpha = 0.8) +
+  facet_wrap( ~ Genes, scale = "free") +
+  geom_smooth(aes(group = 1),
+              method = "lm",
+              fullrange = TRUE) +
+  DEGreport::geom_cor(aes(group = 1), size = 4) +
+  scale_color_manual(values = brewer.pal(4, "Set1")[3:4]) +
+  ggtitle("Genes negatively correlated with Ikzf1 expression in Cre and Ikzf3 KO subset") +
+  scale_x_continuous(breaks = equal_breaks(n = nBreak, s = scalingFactor),
+                     expand = c(scalingFactor, 0)) +
+  scale_y_continuous(breaks = equal_breaks(n = nBreak, s = scalingFactor),
+                     expand = c(scalingFactor, 0))  +
+  currentTheme
+
+
+pdf(
+  paste0(figPath, "Scatterplot_Cor_IKZF1_OtherGenes_CreKO3_NegCor.pdf"),
+  height = 22,
+  width = 30
+)
+pNeg
+dev.off()
+
+```
+
+### Common genes between these and DEGs only up in KO3
+
+"Zbtb32"  "Slc1a4"  "Aldh1l2" "Dmpk"    "Gpt2"    "Tmem40" 
+```{r}
+ko3_pos <- DEstats %>%
+  filter(logFC_KO3 > 0 & logFC_KO1 < 0 & logFC_DKO < 0 & grepl("IKZF3", DEGs_group))
+  
+intersect(ko3_pos$Symbol, colnames(posData))
+# intersect(ko3_pos$Symbol, colnames(negData))
+```
+
+
+
+```{r}
+cor_mat <- cor(exprCreTarget)
+
+library(Hmisc)
+flattenCorrMatrix <- function(cormat
+                              # pmat
+                              ) {
+  ut <- upper.tri(cormat)
+  data.frame(
+    row = rownames(cormat)[row(cormat)[ut]],
+    column = rownames(cormat)[col(cormat)[ut]],
+    cor  =(cormat)[ut]
+    # ,
+    # p = pmat[ut]
+    )
+}
+
+cor_mat <- rcorr(exprCreTarget)
+corStat <- flattenCorrMatrix(cor_mat)
+```
+
+Look at the waterfall plots of the correlation values:
+
+```{r}
+
+# DEstatDEGs_IKZF1 <- DEstats[grepl("IKZF1", DEstats$DEGs_group) | DEstats$DEGs_group == "DEGs in all KOs", ]
+# 
+# DEGs_IKZF1_targetIKZF1 <- DEstatDEGs_IKZF1[DEstatDEGs_IKZF1$TargetGene != "Non-Target gene", ]
+
+ikzfGenes <- c("Ikzf1", 
+               "Ikzf2", 
+               "Ikzf3", 
+               "Ikzf4")
+
+DEstats %>% 
+  filter((grepl("IKZF1", DEGs_group) | 
+            DEGs_group == "DEGs in all KOs") &
+           TargetGene != "Non-Target gene" |
+           Symbol %in% ikzfGenes) %>% 
+  select(c("Symbol", grep("logFC", colnames(DEGsAll), value = T))) %>%
+  # DEGsAllLogFC %>%
+  mutate(Direction = case_when((logFC_DKO > 0 &
+                                  logFC_KO1 > 0 & logFC_KO3 > 0) |
+                                 (logFC_DKO < 0 &
+                                    logFC_KO1 < 0 &
+                                    logFC_KO3 < 0) ~ "Consistent",
+                               TRUE ~ "Different"
+  )) %>%
+  pivot_longer(
+    data = . ,
+    names_to = "Group",
+    values_to = "logFC",
+    cols = 2:4
+  ) %>%
+  ggplot(., aes(
+    x = reorder(Symbol, logFC),
+    y = logFC,
+    fill = Direction
+  )) +
+  geom_bar(stat = "identity") +
+  facet_wrap(. ~ Group, ncol = 1) +
+  # scale_fill_manual(values = brewer.pal(9, "Set1")[c(4)]) +
+  scale_fill_manual(values = brewer.pal(9, "Set1")[c(9, 4)]) +
+  ggtitle("DEGs from Ikzf1 KO that are target genes of the Ikzf1") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title.x = element_blank())
+# 
+# ggsave(filename = "WaterFall_DEGsIKZF1_TargetGeneIKZF1.pdf", device = "pdf", path = figPath, width = 8, height = 7)
+```
+
+
+
+
+
+## Genes correlated with IKZF1
+
+```{r, warning = F, message = F}
+exprCre <- t(ex[, grepl("Cre", colnames(ex))])
+
+corVales <- apply(exprCre, 2, function(x){
+  round(cor.test(x, exprCre[, "Ikzf1"], method = "spearman")[[4]], 3)
+})
+
+pVals <- apply(exprCre, 2, function(x){
+  round(cor.test(x, exprCre[, "Ikzf1"], method = "spearman")[[3]], 3)
+})
+
+varianceVals <- apply(exprCre, 2, function(x){
+  round(var(x), 3)
+})
+
+
+Ikzf1_corData <- data.frame(Genes = colnames(exprCre), 
+                            Rho_Cor = corVales, 
+                            p_Value = pVals, 
+                            Variance = varianceVals)
+
+
+Ikzf1_corData %>%
+  arrange(-Rho_Cor,-Variance) %>%
+  head()
+  
+
+plot(Ikzf1_corData$Rho_Cor, Ikzf1_corData$Variance)
+
+Ikzf1_corData_Targets <- Ikzf1_corData %>%
+  filter(Rho_Cor > 0.5 & Variance > 1)
+  
+Ikzf1_corData_Targets
+```
+
+
+
+
+Finally, using the four Cre samples in your data, I calculated correlations between IKZF1 and all the other genes. Then subset these to keep those with spearman's rho correlation > 0.5 and expression variance > 1. These resulted in 7 genes: **Cnnm2, Cd300lb, Hist1h1c, Mir5125, Pmepa1, Rpl3-ps1, and Spsb1**. None of these genes are amongst our target genes, however, some of them are DEGs, for example, Hist1h1c (down-regulated in KDO and up-regulated in IKZF3 KO), Cd300lb (down in both DKO and IKZF3 KO), and Pmepa1 (down-regulated only in DKO).
+
+This list increases to 13 gene if we focus on the genes with rho > 0.5 and variance > 0.8
+
+```{r}
+Ikzf1_corData_Targets <- Ikzf1_corData %>%
+  filter(Rho_Cor > 0.5 & Variance > 0.8)
+  
+Ikzf1_corData_Targets
+```
+
+```{r}
+as.character(Ikzf1_corData_Targets$Genes)
+```
+
+```{r}
+for(i in unique(as.character(Ikzf1_corData_Targets$Genes))){
+  plot(exprCre[, "Ikzf1"], exprCre[, i ], ylab = i)
+}
+```
+
+
+
+
+
+
+```{r}
+for(i in unique(as.character(Ikzf1_corData_Targets$Genes))){
+  plot(ex["Ikzf1", ], ex[i ,], ylab = i, col = annot_rna$Group)
+}
+```
+
+## Selected genes
+Based on this paper https://www.ncbi.nlm.nih.gov/pubmed/26269456, MICA and PVR/CD155 should be associated with IKZF1/3.
+..."describe novel molecular pathways involved in the regulation of MICA and PVR/CD155 gene expression and identify the transcription factors IKZF-1/IKZF-3 and IRF4 as repressors of these genes in MM cells."
+```{r}
+selg <- c("Mical1", "Mical3", "Micall2", "Pvr")
+
+for(i in selg){
+  plot(exprCre[, "Ikzf1"], exprCre[, i ], ylab = i)
+}
+
+for(i in selg){
+  plot(exprCre[, "Ikzf3"], exprCre[, i ], ylab = i)
+}
+```
+
+https://www.biorxiv.org/content/10.1101/465435v1.full.pdf
+
+
+
+
+
