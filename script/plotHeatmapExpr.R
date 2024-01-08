@@ -1,16 +1,37 @@
+## This is a script for ploting heatmap of gene expression values using teh ComplexHeatmap package in R.
 
+##--------------- Author: Sepideh Foroutan July 2019 ----------------
 
+##--------------- INPUTS:
+## genes : character vector of gene names/IDs to be plotted in teh heatmap
+## exprData = expression matrix (in log format) with gene names/IDs in rows and sample names in columns
+## subsetSample = a character vector of sample names to subset the data based on them (a subset of column nanmes)
 
+## annotData = an annotation data frame, whose row names are the same as the column names of the expression data
+## annotColumns = a character vector of column names in the annotation data to be plotted as sample annotation in the heatmap (a subset of column names in the annotation data)
+## annotColList = a named list of colours for the sample annotations (e.g. if we select "Patients" and "Treatment" as annotation columns, then it is a list with two elements called "Patients" and "Treatment" that has the colour values: e.g. annotColList <- list(Patients = c("red", "blue"), Treatment = c("black", "gray"))
+## annotLegened_ncol = number of columns for annotation legend
 
+## geneAnnot = data frame that has ONLY the columns that we want to generate gene annotations for (e.g. up and down sets)
+## geneColList = named color list for gene annotations
+## heatmapCol = color of heatmap; default: viridis::viridis(100)
 
+## geneColList = Colour for gene annotation
+## clustRows = T,
+## clustCols = T,
+## showRowNames = T,
+## showColNames = T,
+## textSize = 10,
+## plotTitle = "Heatmap"
+
+##-------------- OUTPUT:
+## A Complext heatmap of scaled gene expression values
 
 ##---- rownames annotData must be the same as colnames expr data.  
 plotHeatmapExpr <-
   function(genes,
     exprData = logCPM,
     subsetSample = NULL, 
-    ## heatmapCol = circlize::colorRamp2(c(minExpr, 0, maxExpr), c("yellow3" , "white" , "navy")),
-    # heatmapCol = "default",
     heatmapCol = viridis::viridis(100),
     annotData = NULL,
     annotColumns = c("PatientID", "Tissue", "Response"),
@@ -101,11 +122,6 @@ plotHeatmapExpr <-
       )
     }
       
-      # geneHm <- Heatmap(geneAnnot,
-      #   name = "Genes",
-      #   col = geneCol,
-      #   width = unit(5, "mm"), 
-      #   show_row_names = showRowNames)
     if(! is.null(annotData) & ! is.null(geneAnnot)){  
       expr_hm <- ComplexHeatmap::Heatmap(
         ddgene,

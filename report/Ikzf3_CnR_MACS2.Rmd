@@ -1,14 +1,32 @@
 ---
-title: "Peform DB analysis using limma, and compare the results of MACS2 peak calling from different approaches"
+title: 'DB analysis using edgeR, and comparison between the results of MACS2 peak calling from different approaches'
 author: 
   - name: 'Sepideh Foroutan'
     affiliation: 'Huntington Cancer Immunotherapy Lab'
     url: https://www.monash.edu/discovery-institute/huntington-lab
 date: '11-11-2020'
-output: html_document
+output:
+  rmdformats::readthedown:
+    fig_width: 12
+    fig_height: 6
+    gallery: TRUE
+    highlight: tango
+    lightbox: TRUE
+    self_contained: TRUE
+    thumbnails: FALSE
+    number_sections: TRUE
+    toc_depth: 4
+    use_bookdown: TRUE
+    code_folding: hide
+  html_document2:
+    df_print: paged
+params:
+  update_date: !r paste("Last updated on:", Sys.Date() )
+editor_options: 
+  chunk_output_type: inline
 ---
 
-We have run MACS2 peak calling on the Cut&Run data, and have analysed it using nextflow, manual shell scripting as well as Galaxy. Here, I perform DB analysis using limma, and additionally, I perform a quick comparison between the results obtained from different approaches. 
+We have run MACS2 peak calling on the Cut&Run data, and have analysed it using nextflow, manual shell scripting as well as through the Galaxy. Here, I perform DB analysis using featureCount and edgeR, and additionally, I perform a quick comparison between the results obtained from different approaches. 
 
 ```{r}
 outPath <- "../output/"
@@ -16,7 +34,7 @@ figPath <- "../figure/"
 # macs <- read.csv("../macs2_callpeak/ZEB1_macs2_peaks.csv", stringsAsFactors = F)
 ```
 
-Columns we have in the results are: 
+Columns we have in the data after peak calling are: 
 
 1st: chromosome name
 2nd: start position of peak
@@ -39,7 +57,6 @@ library(ggupset)
 txdb <- TxDb.Mmusculus.UCSC.mm10.knownGene
 
 # peakSet <- import("/Users/mfor0011/Documents/data/Ikzf/Ikfz3_CnR/macs2_callpeak/narrow_peaks/Ikzf3_summits.bed", format = "BED")
-
 file_narrowPeak = "/Users/mfor0011/Documents/data/Ikzf/Ikfz3_CnR/macs2_callpeak/narrow_peaks/Ikzf3_peaks.narrowPeak" 
 
 extraCols_narrowPeak <-
@@ -52,43 +69,6 @@ extraCols_narrowPeak <-
 
 gr_narrowPeak <- import(file_narrowPeak, format = "BED",
                         extraCols = extraCols_narrowPeak)
-
-# peakSet <- read.delim("/Users/mfor0011/Documents/data/Ikzf/Ikfz3_CnR/macs2_callpeak/narrow_peaks/Ikzf3_peaks.narrowPeak", header = F)
-# # 
-# colnames(peakSet) <-
-#   c(
-#     "chr",
-#     "start",
-#     "end",
-#     "name",
-#     "score",
-#     "strand",
-#     "fold-change",
-#     "-log10pvalue",
-#     "-log10qvalue",
-#     "summit"
-#   )
-# # 
-# # 
-# peakSet <- makeGRangesFromDataFrame(
-#   df = peakSet,
-#   keep.extra.columns = TRUE,
-#   ignore.strand = FALSE,
-#   seqinfo = NULL,
-#   seqnames.field = c(
-#     "seqnames",
-#     "seqname",
-#     "chromosome",
-#     "chrom",
-#     "chr",
-#     "chromosome_name",
-#     "seqid"
-#   ),
-#   start.field = "start",
-#   end.field = c("end", "stop"),
-#   strand.field = "strand",
-#   starts.in.df.are.0based = FALSE
-# )
 
 annotatedPeaks <- annotatePeak(
   # peakSet,
@@ -111,12 +91,10 @@ readr::write_csv(as.data.frame(annotatedPeaks), "../output/annotated_Ikzf3_peak_
 
 ```
 
+Info fo running GADEM:
 
-"verbose =1 : Print immediate results on screen.
-genome = Hsapiens : specify the genome.
-We also describe two important parameters:
-P-Value cutoff: 
-- The P-Value cutoff controls the number of binding site in a motif. By default, the P-value cutoff is : 0.0002
+"two important parameters:
+- P-Value cutoff: The P-Value cutoff controls the number of binding site in a motif. By default, the P-value cutoff is : 0.0002
 - E-Value cutoff: The E-Value cutoff controls the number of motifs to be identified. By default, the E-value cutoff is : 0.0"
 
 ```{r}
@@ -145,7 +123,7 @@ gadem <-
 
 
 ## Count reads to peaks
-Get TSS site co-ordinates & count ChIPseq reads to TSS sites:
+Get TSS site co-ordinates & count ChIPseq reads to TSS site; we need to format the tss bed files into SAF format, and count reads to TSS sites with featureCounts.
 
 ```{r}
 bamPath <- "/Users/mfor0011/Documents/data/Ikzf/Ikfz3_CnR/bam_files/"
@@ -192,7 +170,7 @@ f <- featureCounts(
 saveRDS(f , paste0(outPath, "Ikzf3_CnR_FeatureCounts_TSS.RDS"))
 ```
 
-### DB analysis using limma
+### DB analysis using edgeR
 ```{r}
 ## remove rows that are zero in both:
 cc0 <- f$counts

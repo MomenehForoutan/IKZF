@@ -1,13 +1,32 @@
 ---
-title: "Window-based analysis of the Ikzf3 CnR data using csaw"
+title: 'Window-based analysis of the Ikzf3 CnR data using csaw'
 author: 
   - name: 'Sepideh Foroutan'
     affiliation: 'Huntington Cancer Immunotherapy Lab'
     url: https://www.monash.edu/discovery-institute/huntington-lab
 date: '12-11-2020'
-output: html_document
+output:
+  rmdformats::readthedown:
+    fig_width: 12
+    fig_height: 6
+    gallery: TRUE
+    highlight: tango
+    lightbox: TRUE
+    self_contained: TRUE
+    thumbnails: FALSE
+    number_sections: TRUE
+    toc_depth: 4
+    use_bookdown: TRUE
+    code_folding: hide
+  html_document2:
+    df_print: paged
+params:
+  update_date: !r paste("Last updated on:", Sys.Date() )
+editor_options: 
+  chunk_output_type: inline
 ---
 
+We read in the bam file for the Ikzf3 data, and use csaw and rtracklayer packages to identify the window sizes and then perform window based differential binding analysis using edgeR. I perform the analysis using small (50), large (200), and consolidated window sizes.
 ```{r}
 library(csaw)
 library(rtracklayer)
@@ -85,7 +104,6 @@ dev.off()
 
 
 ## use a value that it is larger than the vast majority of fragment sizes; here we use 700
-
 ##----
 
 blackList_mm10 <- import(paste0(dataPath,"/mm10.blacklist.bed"))
@@ -100,7 +118,7 @@ param <-
 ```
 
 
-## determining window size
+## Determine window size
 ```{r}
 dedup.on <- reform(param, dedup=TRUE)
 
@@ -324,83 +342,11 @@ results.norep.large <- glmLRT(fit.norep.large, contrast = c(0, 1))
 merged.large <-
   mergeResults(win.filtered.large, results.norep.large$table, tol = 1000L)
 
-##----- add row data:
-# filtered.data <- win.data[keep,]
-# filtered.data.200 <- win.data_200[keep_large,]
-# 
-# rowData(filtered.data) <-  as.data.frame(res)
-# # rowData(filtered.data) <- cbind(rowData(filtered.data), res)
-# rowData(filtered.data.200) <- as.data.frame(res.win.large)
-#
-##------- instead of these we can run single command after these steps:
-# 
-# merged <-
-#   mergeWindows(
-#     filtered.data,
-#     tol = 1000
-#   )
-# 
-# summary(width(merged$regions))
-# merged.max <- mergeWindows(filtered.data, tol=1000L, max.width=3000L)
-# summary(width(merged.max$regions))
-# 
-# ## Combining window-level p-values
-# tabcom <- combineTests(merged$ids, res$table)
-# is.sig.region <- tabcom$FDR <= 0.05 
-# summary(is.sig.region)
-# table(tabcom$direction[is.sig.region])  ## down
-# 
-# # This reports the index of the window with the lowest p-value in each cluster as well as the associated statistics.
-# tab.best <- getBestTest(merged$ids, res$table) 
-# head(tab.best)
-# The corrected p-value is reported as PValue in tab.best, and can be used for correction across regions using the BH method to control the region-level FDR.
-
-##------- run this single command instead
-# For convenience, the steps of merging windows and computing statistics are implemented into a single wrapper function. This simply calls mergeWindows followed by combineTests and getBestTest.
-
-# merge.res <- mergeResults(filtered.data, res$table, tol=100, merge.args=list(max.width=4000))
-# names(merge.res)
-# 
-# merge.res.large <- mergeResults(filtered.data.200, res.win.large$table, tol=100, merge.args=list(max.width=4000))
-# names(merge.res.large)
-
-
-
-### Weighting windows on abundance
-# tab.ave <- getBestTest(merged$id, results.norep$table, by.pval=FALSE) 
-# weights <- upweightSummit(merged$id, tab.ave$rep.test) 
-# head(weights)
-# ## [1] 1 1 1 6 1 1
-# tabcom.w <- combineTests(merged$id, results$table, weight=weights)
-# head(tabcom.w)
 ```
 
 ## annots
 ```{r}
-# library(biomaRt)
-# ensembl <- useMart("ensembl", dataset = "mmusculus_gene_ensembl")
-# annot <-
-#   biomaRt::getBM(
-#     attributes = c(
-#       'chromosome_name',
-#       'start_position',
-#       'end_position' ,
-#       'strand',
-#       'ensembl_gene_id',
-#       'external_gene_name',
-#       'gene_biotype'
-#     ),
-#     mart = ensembl
-#   )
-# annot$chromosome_name <- paste0("chr", annot$chromosome_name)
-# colnames(annot)[1:4] <- c("seqnames", "start", "end", "strand")
-# annot$strand <- ifelse(annot$strand == "1","+","-")
-# annot <- makeGRangesFromDataFrame(annot, keep.extra.columns = TRUE)
-# # remove pseusogenes from the annotation
-# annot <- annot[grep("protein_coding", annot$gene_biotype)]
-
-##--------- I used this instead:
- anno.ranges <-
+anno.ranges <-
    detailRanges(txdb = TxDb.Mmusculus.UCSC.mm10.knownGene, orgdb = org.Mm.eg.db)
 anno.ranges
 ```
@@ -412,12 +358,9 @@ anno.ranges
 cons <-
   mergeResultsList(
     ranges.list = list(win.filtered, win.filtered.large),
-    # ranges.list = list(filtered.data, filtered.data.200),
     tab.list = list(results.norep$table, results.norep.large$table),
     tol = 1000,
     equiweight=TRUE
-    # merge.args = list("PValue", "logFC")
-    # merge.args=list(max.width=4000)
   )
 
 
@@ -541,35 +484,6 @@ write.table(as.data.frame(mcols(sig_windows_comb)),
             paste0(outPath, "Ikzf3_CnR_CSAW_fraglen195_combFDR_mergeWin50_normFactors.txt"), 
             row.names = F)
 
-
-# ofile <- gzfile("clusters.tsv.gz", open="w") write.table(as.data.frame(merged$region), file=ofile,
-# row.names=FALSE, quote=FALSE, sep="\t") close(ofile)
-
-# is.sig <- merged$region$FDR <= 0.05 
-# library(rtracklayer)
-# test <- merged$region[is.sig]
-# test$score <- -10*log10(merged$region$FDR[is.sig]) 
-# names(test) <- paste0("region", 1:sum(is.sig)) 
-# export(test, "clusters.bed") 
-# head(read.table("clusters.bed"))
-
-# 
-# sig_windows <- merged$regions[merged$best$PValue < 0.05]
-# mcols(sig_windows) <- DataFrame(merged$best[merged$best$PValue < 0.05, ])
-# 
-# # load Ensembl annotation and direct annotation
-# D <- distanceToNearest(sig_windows, annot, select= "all")
-# # Each of the 2 combined objects has sequence levels not in the other: - Make sure to always combine/compare objects based on the same reference
-# 
-# sig_windows <- sig_windows[queryHits(D)]
-# 
-# mcols(sig_windows) <- cbind(mcols(sig_windows), mcols(annot[subjectHits(D)]), mcols(D))
-# hist(as.numeric(mcols(sig_windows)$PValue))
-# 
-# write.table(as.data.frame(mcols(sig_windows)),
-#             paste0(outPath, "Ikzf3_CnR_CSAW_fraglen195_bestPvals_mergeWin50.txt"), 
-#             row.names = F)
-
 ##--- with previous normalisation: 35 hits - 28 are common with MACS2 results
 # intersect(macsIkzf3$SYMBOL, mcols(sig_windows)$external_gene_name)
 #  [1] "Fasl"          "Gm12216"       "Ctns"          "Fbxo47"        "Plxdc1"        "Ddx5"          "Hnrnpa1"      
@@ -632,29 +546,3 @@ intersect(unique(mcols(sig_windows_comb.large)$symbol), unique(mcols(sig_windows
 ## 394 genes are common between the 400 genes from win50 and 775 genes from win200
 ```
 
-```{r}
-# # merge.res.large$best
-# 
-# sig_windows.large <- merge.res.large$regions[merge.res.large$best$PValue < 0.05]
-# # merge.res$regions[merge.res$best$FDR < 0.05]
-# 
-# # mcols(sig_windows) <- DataFrame([cons$table$FDR < 0.05, ])
-# # sig_windows <- cons$region[cons$table$FDR < 0.05]
-# mcols(sig_windows.large) <- DataFrame(merge.res.large$best[merge.res.large$best$PValue < 0.05, ])
-# 
-# # load Ensembl annotation and direct annotation
-# D <- distanceToNearest(sig_windows.large, annot, select= "all")
-# # Each of the 2 combined objects has sequence levels not in the other: - Make sure to always combine/compare objects based on the same reference
-# 
-# sig_windows.large <- sig_windows.large[queryHits(D)]
-# 
-# mcols(sig_windows.large) <- cbind(mcols(sig_windows.large), mcols(annot[subjectHits(D)]), mcols(D))
-# hist(as.numeric(mcols(sig_windows.large)$PValue))
-# 
-# write.table(as.data.frame(mcols(sig_windows.large)),
-#             paste0(outPath, "Ikzf3_CnR_CSAW_fraglen195_bestPvals_mergeWin200.txt"), 
-#             row.names = F)
-# 
-# ## 11 hits - 3 are common with MACS2 results: "Kpna2"         "Hnrnpk"        "2410131K14Rik"
-# intersect(macsIkzf3$SYMBOL, mcols(sig_windows.large)$external_gene_name)
-```
