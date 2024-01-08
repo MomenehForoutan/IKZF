@@ -7,4 +7,5 @@ Under the report/ folder, there are three Rmd files, containing the main analysi
 
 Under the script/ folder, there are three scripts for QC and data visualisations:
 - script/**plotHeatmapExpr.R**: a ComplexHeatmap-based custom function to generates heatmaps of gene expression and takes on row and column annotation
-- script/**PCA_plot.R**: custom function to generate PCA plots using three PCs and annotates the percent variation explained by each PC on the plots.  script/**RLE_ggplot.R**: a ggplot-based custom function to calculate and plot relative log expression in the transcriptomics data to examine unwanted variation. 
+- script/**PCA_plot.R**: custom function to generate PCA plots using three PCs and annotates the percent variation explained by each PC on the plots.  
+- script/**RLE_ggplot.R**: a ggplot-based custom function to calculate and plot relative log expression in the transcriptomics data to examine unwanted variation. 
