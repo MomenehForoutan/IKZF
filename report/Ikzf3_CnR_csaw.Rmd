@@ -1,0 +1,660 @@
+---
+title: "Window-based analysis of the Ikzf3 CnR data using csaw"
+author: 
+  - name: 'Sepideh Foroutan'
+    affiliation: 'Huntington Cancer Immunotherapy Lab'
+    url: https://www.monash.edu/discovery-institute/huntington-lab
+date: '12-11-2020'
+output: html_document
+---
+
+```{r}
+library(csaw)
+library(rtracklayer)
+library(edgeR)
+library(RColorBrewer)
+
+bam_path <- "/Users/mfor0011/Documents/data/Ikzf/Ikfz3_CnR/bam_files"
+
+bam_files <- list.files(path = bam_path, pattern = "bam$", full.names = TRUE)
+
+
+sample_annot <- as.data.frame(cbind(
+  filename = basename(bam_files),
+  group = c("Ikzf3", "control")
+) )
+
+group <- as.factor(sample_annot$group)
+group
+
+
+##----- determine max size:
+out <- getPESizes(bam_files[1])
+frag.sizes <- out$sizes[out$sizes<=800]
+
+# $diagnostics
+  #  total.reads  mapped.reads 
+  #     3352643       3352643 
+       # single mate.unmapped 
+            # 0            77 
+   # unoriented     inter.chr 
+            # 0             0 
+
+png(
+  paste0(figPath, "Hist_FragmentSize_AIOLOS_CSAW.png"),
+  height = 400,
+  width = 500
+)
+hist(
+  frag.sizes,
+  breaks = 50,
+  xlab = "Fragment sizes (bp)",
+  ylab = "Frequency",
+  main = "AIOLOS",
+  col = "grey80"
+)
+dev.off()
+
+
+out2 <- getPESizes(bam_files[2])
+frag.sizes2 <- out2$sizes[out2$sizes<=800]
+# $diagnostics
+#   total.reads  mapped.reads 
+#       2862057       2862057 
+#        single mate.unmapped 
+#             0            65 
+#    unoriented     inter.chr 
+#             0             0 
+
+
+png(
+  paste0(figPath, "Hist_FragmentSize_NC_CSAW.png"),
+  height = 400,
+  width = 500
+)
+hist(
+  frag.sizes2,
+  breaks = 50,
+  xlab = "Fragment sizes (bp)",
+  ylab = "Frequency",
+  # main = "",
+  col = "grey80", 
+  main = "NC"
+)
+dev.off()
+
+
+## use a value that it is larger than the vast majority of fragment sizes; here we use 700
+
+##----
+
+blackList_mm10 <- import(paste0(dataPath,"/mm10.blacklist.bed"))
+
+param <-
+  readParam(
+    minq = 20,
+    discard = blackList_mm10,
+    pe = "both",
+    max.frag = 700
+  )
+```
+
+
+## determining window size
+```{r}
+dedup.on <- reform(param, dedup=TRUE)
+
+collected <- list()
+
+for (curbam in bam_files) {
+  windowed <-
+    windowCounts(
+      curbam,
+      spacing = 50,
+      width = 50,
+      param = dedup.on,
+      filter = 20
+    )
+  rwsms <- rowSums(assay(windowed))
+  maxed <- findMaxima(rowRanges(windowed), range = 1000, metric = rwsms)
+  collected[[curbam]] <-
+    profileSites(curbam, rowRanges(windowed)[maxed],
+                 param = dedup.on)
+}
+
+max.delay <- 500
+
+x <-  correlateReads(bam.files = bam_files[1], 
+                     max.dist = max.delay, 
+                     param = dedup.on)
+
+xmax <- maximizeCcf(x)
+
+x2 <-  correlateReads(bam.files = bam_files[2], 
+                     max.dist = max.delay, 
+                     param = dedup.on)
+
+xmax2 <- maximizeCcf(x2)
+
+
+
+png(paste0(figPath, "maximizeCCF_CSAW.png"),
+    width = 800,
+    height = 400)
+par(mfrow = c(1, 2))
+
+plot(0:max.delay,
+     x,
+     type = "l",
+     ylab = "CCF",
+     xlab = "Delay (bp)", 
+     main = "AIOLOS")
+abline(v =  xmax, col = "red")
+
+
+plot(0:max.delay,
+     x2,
+     type = "l",
+     ylab = "CCF",
+     xlab = "Delay (bp)",
+     main = "NC")
+abline(v =  xmax2, col = "red")
+
+dev.off()
+
+
+# frag.len <- 100 
+frag.len <- xmax
+
+win.data <-
+  windowCounts(bam_files,
+               param = param,
+               width = 50,
+               ext = frag.len) # 50bp windows
+
+win.data_200 <-
+  windowCounts(bam_files,
+               param = param,
+               width = 200 ,
+               ext = frag.len) # 200bp windows
+
+
+save(win.data, file = paste0(outPath, "win_data_Ikzf3_fraglen100.RData"))
+save(win.data_200, file = paste0(outPath, "win.data_200_Ikzf3_fraglen100.RData"))
+
+bin.data <-
+  windowCounts(bam_files,
+               bin = TRUE,
+               width = 2000,
+               param = param)
+
+
+# filtd <- normFactors(bin.data, se.out=filtered.data)
+save(bin.data, file= paste0(outPath, "bin_data_Ikzf3.RData"))
+```
+
+
+## Read count quant ad filtration
+```{r}
+## save data for the chip:
+
+filter.stat <-
+  filterWindowsGlobal(win.data, background = bin.data)
+
+filter.stat.200 <-
+  filterWindowsGlobal(win.data_200, background = bin.data)
+
+min.fc <- 4
+keep <- filter.stat$filter > log2(min.fc)
+sum(keep)
+## 1642
+
+keep_large <- filter.stat.200$filter > log2(min.fc)
+sum(keep_large)
+# 4407
+```
+
+
+```{r}
+png(paste0(figPath, "FilterStats_CSAW.png"),
+    width = 700,
+    height = 300)
+
+par(mfrow = c(1, 2))
+
+hist(
+  filter.stat$back.abundances,
+  main = "",
+  breaks = 50,
+  xlab = "Background abundance (log2 cpm) - 50"
+)
+threshold <-
+  filter.stat$abundances[1] - filter.stat$filter[1] +
+  log2(min.fc)
+abline(v = threshold, col = "red")
+
+
+hist(
+  filter.stat.200$back.abundances,
+  main = "",
+  breaks = 50,
+  xlab = "Background abundance (log2 cpm) - 200"
+)
+threshold <-
+  filter.stat.200$abundances[1] - filter.stat.200$filter[1] + log2(min.fc)
+abline(v = threshold, col = "red")
+
+dev.off()
+```
+
+Read abundance of discarded windows. Many of the discarded windows had read abundance of less than 2 log2 CPM. These correspond to windows with more than 4 fold difference in coverage compared with 2Kbp neighbourhood in each library.
+
+# Normalisation and data exploration
+## Filter uninteresting windows
+```{r}
+win.filtered <- win.data[keep,]
+win.filtered.large <- win.data_200[keep_large,]
+
+colData(win.filtered)
+colData(win.filtered.large)
+```
+
+```{r}
+abval <- filter.stat$abundances[keep]
+o <- order(abval)
+adj.counts <- cpm(asDGEList(win.filtered), log = TRUE)
+
+mval <- adj.counts[, 1] - adj.counts[, 2]
+
+fit <- loessFit(x = abval, y = mval)
+
+png(paste0(figPath, "MAplot_FilteredAbundances_CSAW.png"),
+    width = 600,
+    height = 450)
+
+smoothScatter(
+  x = abval,
+  y = mval,
+  xlab = "A",
+  ylab = "M",
+  main = paste("IKZF3 1 vs Control")
+)
+lines(abval[o], fit$fitted[o], col = "red")
+
+dev.off()
+```
+
+## normFactors and DEGList  
+
+```{r}
+win.filtered <- normFactors(bin.data, se.out = win.filtered)
+win.filtered.large <-
+  normFactors(bin.data, se.out = win.filtered.large)
+
+# y <- asDGEList(normfacs)
+y <- asDGEList(win.filtered)
+colnames(y) <- c("Ikzf3", "Ctrl")
+
+y$samples$group <- group
+design <- model.matrix(~ group)
+design
+
+# repeat the same for large windows
+# y.large <- asDGEList(normfacs.win.large)
+y.large <- asDGEList(win.filtered.large)
+colnames(y.large) <- c("Ikzf3", "Ctrl")
+y.large$samples$group <- group
+
+```
+
+When there is no replicates, it is recommended:
+"... it maybe helpful to salvage some information from datasets that lack replicates. This is done by supplying a “reasonable” value for the NB dispersion during GLM fitting (e.g., 0.05 - 0.1, based on past experience). DB windows are then identified using the likelihood ratio test..."
+```{r}
+fit.norep <- glmFit(y, design, dispersion = 0.05)
+results.norep <- glmLRT(fit.norep, contrast = c(0, 1))
+head(results.norep$table)
+
+merged <- mergeResults(win.filtered, results.norep$table, tol = 1000L)
+
+##---- large:
+fit.norep.large <- glmFit(y.large, design, dispersion = 0.05)
+results.norep.large <- glmLRT(fit.norep.large, contrast = c(0, 1))
+# res.win.large <- topTags(results.norep.large, n = Inf,  sort.by = "none")
+
+merged.large <-
+  mergeResults(win.filtered.large, results.norep.large$table, tol = 1000L)
+
+##----- add row data:
+# filtered.data <- win.data[keep,]
+# filtered.data.200 <- win.data_200[keep_large,]
+# 
+# rowData(filtered.data) <-  as.data.frame(res)
+# # rowData(filtered.data) <- cbind(rowData(filtered.data), res)
+# rowData(filtered.data.200) <- as.data.frame(res.win.large)
+#
+##------- instead of these we can run single command after these steps:
+# 
+# merged <-
+#   mergeWindows(
+#     filtered.data,
+#     tol = 1000
+#   )
+# 
+# summary(width(merged$regions))
+# merged.max <- mergeWindows(filtered.data, tol=1000L, max.width=3000L)
+# summary(width(merged.max$regions))
+# 
+# ## Combining window-level p-values
+# tabcom <- combineTests(merged$ids, res$table)
+# is.sig.region <- tabcom$FDR <= 0.05 
+# summary(is.sig.region)
+# table(tabcom$direction[is.sig.region])  ## down
+# 
+# # This reports the index of the window with the lowest p-value in each cluster as well as the associated statistics.
+# tab.best <- getBestTest(merged$ids, res$table) 
+# head(tab.best)
+# The corrected p-value is reported as PValue in tab.best, and can be used for correction across regions using the BH method to control the region-level FDR.
+
+##------- run this single command instead
+# For convenience, the steps of merging windows and computing statistics are implemented into a single wrapper function. This simply calls mergeWindows followed by combineTests and getBestTest.
+
+# merge.res <- mergeResults(filtered.data, res$table, tol=100, merge.args=list(max.width=4000))
+# names(merge.res)
+# 
+# merge.res.large <- mergeResults(filtered.data.200, res.win.large$table, tol=100, merge.args=list(max.width=4000))
+# names(merge.res.large)
+
+
+
+### Weighting windows on abundance
+# tab.ave <- getBestTest(merged$id, results.norep$table, by.pval=FALSE) 
+# weights <- upweightSummit(merged$id, tab.ave$rep.test) 
+# head(weights)
+# ## [1] 1 1 1 6 1 1
+# tabcom.w <- combineTests(merged$id, results$table, weight=weights)
+# head(tabcom.w)
+```
+
+## annots
+```{r}
+# library(biomaRt)
+# ensembl <- useMart("ensembl", dataset = "mmusculus_gene_ensembl")
+# annot <-
+#   biomaRt::getBM(
+#     attributes = c(
+#       'chromosome_name',
+#       'start_position',
+#       'end_position' ,
+#       'strand',
+#       'ensembl_gene_id',
+#       'external_gene_name',
+#       'gene_biotype'
+#     ),
+#     mart = ensembl
+#   )
+# annot$chromosome_name <- paste0("chr", annot$chromosome_name)
+# colnames(annot)[1:4] <- c("seqnames", "start", "end", "strand")
+# annot$strand <- ifelse(annot$strand == "1","+","-")
+# annot <- makeGRangesFromDataFrame(annot, keep.extra.columns = TRUE)
+# # remove pseusogenes from the annotation
+# annot <- annot[grep("protein_coding", annot$gene_biotype)]
+
+##--------- I used this instead:
+ anno.ranges <-
+   detailRanges(txdb = TxDb.Mmusculus.UCSC.mm10.knownGene, orgdb = org.Mm.eg.db)
+anno.ranges
+```
+
+# Significant calls
+
+### For consolidated window sizes
+```{r}
+cons <-
+  mergeResultsList(
+    ranges.list = list(win.filtered, win.filtered.large),
+    # ranges.list = list(filtered.data, filtered.data.200),
+    tab.list = list(results.norep$table, results.norep.large$table),
+    tol = 1000,
+    equiweight=TRUE
+    # merge.args = list("PValue", "logFC")
+    # merge.args=list(max.width=4000)
+  )
+
+
+mcols(cons$regions) <- cons$combined
+
+library(org.Mm.eg.db)
+anno.cons <-
+  detailRanges(
+    cons$regions,
+    txdb = TxDb.Mmusculus.UCSC.mm10.knownGene,
+    orgdb = org.Mm.eg.db,
+    promoter = c(3000, 1000),
+    dist = 5000
+  )
+
+ cons$regions$overlap <- anno.cons$overlap 
+ cons$regions$left <- anno.cons$left 
+ cons$regions$right <- anno.cons$right
+
+# saveRDS(cons, paste0(outPath, "Ikzf3_CnR_CSAW_fraglen195_combFDR_ConsWin50-200_normFactors.RDS"))
+
+sig_windows_comb.cons <- cons$regions[cons$combined$FDR < 0.05]
+
+## 600 ranges (peaks)
+mcols(sig_windows_comb.cons) <- DataFrame(cons$combined[cons$combined$FDR < 0.05, ])
+
+# saveRDS(sig_windows_comb.cons, paste0(outPath, "Ikzf3_CnR_CSAW_fraglen195_combFDR_ConsWin50-200_normFactors_GRanges600.RDS"))
+
+
+D_comb <-
+  distanceToNearest(sig_windows_comb.cons, anno.ranges, select = "all")
+
+sig_windows_comb.cons2 <- sig_windows_comb.cons[queryHits(D_comb)]
+
+mcols(sig_windows_comb.cons2) <-
+  cbind(mcols(sig_windows_comb.cons2),
+        mcols(anno.ranges[subjectHits(D_comb)]),
+        mcols(D_comb))
+
+
+write.table(
+  as.data.frame(mcols(sig_windows_comb.cons2)),
+  paste0(
+    outPath,
+    "Ikzf3_CnR_CSAW_fraglen195_combFDR_ConsWin50-200_normFactors.txt"
+  ),
+  row.names = F,
+  sep = "\t"
+)
+
+## 768 from csaw and 462 common with MACS2
+length(unique(intersect(mcols(sig_windows_comb.cons2)$symbol, macsIkzf3$SYMBOL)))
+# 462 common
+
+length(unique(intersect(mcols(sig_windows_comb.large)$symbol, macsIkzf3$SYMBOL)))
+## 464
+
+length(intersect(unique(mcols(sig_windows_comb.large)$symbol), unique(mcols(sig_windows_comb)$symbol)))
+## 394
+
+length(intersect(unique(mcols(sig_windows_comb.cons)$symbol), unique(mcols(sig_windows_comb)$symbol)))
+## 396
+
+length(intersect(unique(mcols(sig_windows_comb.cons)$symbol), unique(mcols(sig_windows_comb.large)$symbol)))
+## 765 common
+```
+
+
+### For merged win50
+detailRanges: This will identify overlaps between the regions and annotated genomic features such as exons, introns and promoters. Here, the promoter region of each gene is defined as some interval 3 kbp up- and 1 kbp downstream of the TSS for that gene. Any exonic features within dist on the left or right side of each supplied region will also be reported.
+
+Character vectors of compact string representations are provided to summarize the features overlapped by each supplied region. Each pattern contains GENE|STRAND|TYPE to describe the strand and overlapped features of that gene. Exons are labelled as E, promoters are P, and introns are I. For left and right, TYPE is replaced by DISTANCE. This indicates the gap (in base pairs) between the supplied region and the closest non-overlapping exon of the annotated feature. All of this annotation can be stored in the metadata of the GRanges object for later use.
+```{r}
+mcols(merged$regions) <- merged$combined
+
+
+
+library(org.Mm.eg.db)
+anno <-
+  detailRanges(
+    merged$regions,
+    txdb = TxDb.Mmusculus.UCSC.mm10.knownGene,
+    orgdb = org.Mm.eg.db,
+    promoter = c(3000, 1000),
+    dist = 5000
+  )
+
+ merged$regions$overlap <- anno$overlap 
+ merged$regions$left <- anno$left 
+ merged$regions$right <- anno$right
+
+# saveRDS(merged, paste0(outPath, "Ikzf3_CnR_CSAW_fraglen195_combFDR_mergedWin50_normFactors.RDS"))
+ 
+
+##---- all best sig are in comb significant, so we use comb significant
+# sig_windows_best <- merged$regions[merged$best$FDR < 0.05]
+sig_windows_comb <- merged$regions[merged$combined$FDR < 0.05]
+
+# mcols(sig_windows_best) <- DataFrame(merged$best[merged$best$FDR < 0.05, ])
+mcols(sig_windows_comb) <- DataFrame(merged$combined[merged$combined$FDR < 0.05, ])
+
+# load Ensembl annotation and direct annotation
+# D_best <- distanceToNearest(sig_windows_best, anno.ranges, select= "all")
+D_comb <- distanceToNearest(sig_windows_comb, anno.ranges, select= "all")
+# Each of the 2 combined objects has sequence levels not in the other: - Make sure to always combine/compare objects based on the same reference
+
+# sig_windows_best <- sig_windows_best[queryHits(D_best)]
+# mcols(sig_windows_best) <- cbind(mcols(sig_windows_best),
+#                                  mcols(anno.ranges[subjectHits(D_best)]), 
+#                                  mcols(D_best))
+
+sig_windows_comb <- sig_windows_comb[queryHits(D_comb)]
+mcols(sig_windows_comb) <- cbind(mcols(sig_windows_comb),
+                                 mcols(anno.ranges[subjectHits(D_comb)]), 
+                                 mcols(D_comb))
+
+
+hist(as.numeric(mcols(sig_windows_comb)$PValue))
+
+write.table(as.data.frame(mcols(sig_windows_comb)),
+            paste0(outPath, "Ikzf3_CnR_CSAW_fraglen195_combFDR_mergeWin50_normFactors.txt"), 
+            row.names = F)
+
+
+# ofile <- gzfile("clusters.tsv.gz", open="w") write.table(as.data.frame(merged$region), file=ofile,
+# row.names=FALSE, quote=FALSE, sep="\t") close(ofile)
+
+# is.sig <- merged$region$FDR <= 0.05 
+# library(rtracklayer)
+# test <- merged$region[is.sig]
+# test$score <- -10*log10(merged$region$FDR[is.sig]) 
+# names(test) <- paste0("region", 1:sum(is.sig)) 
+# export(test, "clusters.bed") 
+# head(read.table("clusters.bed"))
+
+# 
+# sig_windows <- merged$regions[merged$best$PValue < 0.05]
+# mcols(sig_windows) <- DataFrame(merged$best[merged$best$PValue < 0.05, ])
+# 
+# # load Ensembl annotation and direct annotation
+# D <- distanceToNearest(sig_windows, annot, select= "all")
+# # Each of the 2 combined objects has sequence levels not in the other: - Make sure to always combine/compare objects based on the same reference
+# 
+# sig_windows <- sig_windows[queryHits(D)]
+# 
+# mcols(sig_windows) <- cbind(mcols(sig_windows), mcols(annot[subjectHits(D)]), mcols(D))
+# hist(as.numeric(mcols(sig_windows)$PValue))
+# 
+# write.table(as.data.frame(mcols(sig_windows)),
+#             paste0(outPath, "Ikzf3_CnR_CSAW_fraglen195_bestPvals_mergeWin50.txt"), 
+#             row.names = F)
+
+##--- with previous normalisation: 35 hits - 28 are common with MACS2 results
+# intersect(macsIkzf3$SYMBOL, mcols(sig_windows)$external_gene_name)
+#  [1] "Fasl"          "Gm12216"       "Ctns"          "Fbxo47"        "Plxdc1"        "Ddx5"          "Hnrnpa1"      
+#  [8] "Cryzl1"        "Rab40c"        "Snx15"         "Garnl3"        "Serpini1"      "Zfp687"        "Rbm15"        
+# [15] "Ugcg"          "Coa7"          "Kif2c"         "Srrm1"         "Sbno1"         "Tbl2"          "Chst12"       
+# [22] "Prss2"         "Bhlhe40"       "Klri2"         "Mast3"         "4931428F04Rik" "Snapc5"        "Poc1a"   
+##---- with normFactos: 400 in csaw 265 common genes
+unique(intersect(mcols(sig_windows_comb)$symbol, macsIkzf3$SYMBOL))
+```
+
+
+### For merged win200
+```{r}
+
+mcols(merged.large$regions) <- merged.large$combined
+
+library(org.Mm.eg.db)
+anno.large <-
+  detailRanges(
+    merged.large$regions,
+    txdb = TxDb.Mmusculus.UCSC.mm10.knownGene,
+    orgdb = org.Mm.eg.db,
+    promoter = c(3000, 1000),
+    dist = 5000
+  )
+
+ merged.large$regions$overlap <- anno.large$overlap 
+ merged.large$regions$left <- anno.large$left 
+ merged.large$regions$right <- anno.large$right
+
+# saveRDS(merged.large, paste0(outPath, "Ikzf3_CnR_CSAW_fraglen195_combFDR_mergedWin200_normFactors.RDS"))
+ 
+anno.ranges <-
+   detailRanges(txdb = TxDb.Mmusculus.UCSC.mm10.knownGene, orgdb = org.Mm.eg.db)
+anno.ranges
+
+sig_windows_comb.large <- merged.large$regions[merged.large$combined$FDR < 0.05]
+mcols(sig_windows_comb.large) <- DataFrame(merged.large$combined[merged.large$combined$FDR < 0.05, ])
+
+D_comb <- distanceToNearest(sig_windows_comb.large, anno.ranges, select= "all")
+
+sig_windows_comb.large <- sig_windows_comb.large[queryHits(D_comb)]
+mcols(sig_windows_comb.large) <- cbind(mcols(sig_windows_comb.large),
+                                 mcols(anno.ranges[subjectHits(D_comb)]), 
+                                 mcols(D_comb))
+
+
+hist(as.numeric(mcols(sig_windows_comb.large)$PValue))
+
+write.table(as.data.frame(mcols(sig_windows_comb.large)),
+            paste0(outPath, "Ikzf3_CnR_CSAW_fraglen195_combFDR_mergeWin200_normFactors.txt"), 
+            row.names = F)
+
+
+##---- with normFactos: 775 in csaw 464 common genes
+unique(intersect(mcols(sig_windows_comb.large)$symbol, macsIkzf3$SYMBOL))
+
+intersect(unique(mcols(sig_windows_comb.large)$symbol), unique(mcols(sig_windows_comb)$symbol))
+
+## 394 genes are common between the 400 genes from win50 and 775 genes from win200
+```
+
+```{r}
+# # merge.res.large$best
+# 
+# sig_windows.large <- merge.res.large$regions[merge.res.large$best$PValue < 0.05]
+# # merge.res$regions[merge.res$best$FDR < 0.05]
+# 
+# # mcols(sig_windows) <- DataFrame([cons$table$FDR < 0.05, ])
+# # sig_windows <- cons$region[cons$table$FDR < 0.05]
+# mcols(sig_windows.large) <- DataFrame(merge.res.large$best[merge.res.large$best$PValue < 0.05, ])
+# 
+# # load Ensembl annotation and direct annotation
+# D <- distanceToNearest(sig_windows.large, annot, select= "all")
+# # Each of the 2 combined objects has sequence levels not in the other: - Make sure to always combine/compare objects based on the same reference
+# 
+# sig_windows.large <- sig_windows.large[queryHits(D)]
+# 
+# mcols(sig_windows.large) <- cbind(mcols(sig_windows.large), mcols(annot[subjectHits(D)]), mcols(D))
+# hist(as.numeric(mcols(sig_windows.large)$PValue))
+# 
+# write.table(as.data.frame(mcols(sig_windows.large)),
+#             paste0(outPath, "Ikzf3_CnR_CSAW_fraglen195_bestPvals_mergeWin200.txt"), 
+#             row.names = F)
+# 
+# ## 11 hits - 3 are common with MACS2 results: "Kpna2"         "Hnrnpk"        "2410131K14Rik"
+# intersect(macsIkzf3$SYMBOL, mcols(sig_windows.large)$external_gene_name)
+```

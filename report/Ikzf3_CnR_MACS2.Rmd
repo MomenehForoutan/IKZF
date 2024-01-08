@@ -1,0 +1,482 @@
+---
+title: "Peform DB analysis using limma, and compare the results of MACS2 peak calling from different approaches"
+author: 
+  - name: 'Sepideh Foroutan'
+    affiliation: 'Huntington Cancer Immunotherapy Lab'
+    url: https://www.monash.edu/discovery-institute/huntington-lab
+date: '11-11-2020'
+output: html_document
+---
+
+We have run MACS2 peak calling on the Cut&Run data, and have analysed it using nextflow, manual shell scripting as well as Galaxy. Here, I perform DB analysis using limma, and additionally, I perform a quick comparison between the results obtained from different approaches. 
+
+```{r}
+outPath <- "../output/"
+figPath <- "../figure/"
+# macs <- read.csv("../macs2_callpeak/ZEB1_macs2_peaks.csv", stringsAsFactors = F)
+```
+
+Columns we have in the results are: 
+
+1st: chromosome name
+2nd: start position of peak
+3rd: end position of peak
+4th: name of peak
+5th: integer score for display in genome browser (e.g. UCSC)
+6th: strand, either "." (=no strand) or "+" or "-"
+7th: fold-change
+8th: -log10pvalue
+9th: -log10qvalue
+10th: relative summit position to peak start 
+```{r}
+library(rtracklayer)
+library(magrittr)
+library(ChIPseeker)
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+library(org.Mm.eg.db)
+library(ggupset) 
+
+txdb <- TxDb.Mmusculus.UCSC.mm10.knownGene
+
+# peakSet <- import("/Users/mfor0011/Documents/data/Ikzf/Ikfz3_CnR/macs2_callpeak/narrow_peaks/Ikzf3_summits.bed", format = "BED")
+
+file_narrowPeak = "/Users/mfor0011/Documents/data/Ikzf/Ikfz3_CnR/macs2_callpeak/narrow_peaks/Ikzf3_peaks.narrowPeak" 
+
+extraCols_narrowPeak <-
+  c(
+    signalValue = "numeric",
+    pValue = "numeric",
+    qValue = "numeric",
+    peak = "integer"
+  )
+
+gr_narrowPeak <- import(file_narrowPeak, format = "BED",
+                        extraCols = extraCols_narrowPeak)
+
+# peakSet <- read.delim("/Users/mfor0011/Documents/data/Ikzf/Ikfz3_CnR/macs2_callpeak/narrow_peaks/Ikzf3_peaks.narrowPeak", header = F)
+# # 
+# colnames(peakSet) <-
+#   c(
+#     "chr",
+#     "start",
+#     "end",
+#     "name",
+#     "score",
+#     "strand",
+#     "fold-change",
+#     "-log10pvalue",
+#     "-log10qvalue",
+#     "summit"
+#   )
+# # 
+# # 
+# peakSet <- makeGRangesFromDataFrame(
+#   df = peakSet,
+#   keep.extra.columns = TRUE,
+#   ignore.strand = FALSE,
+#   seqinfo = NULL,
+#   seqnames.field = c(
+#     "seqnames",
+#     "seqname",
+#     "chromosome",
+#     "chrom",
+#     "chr",
+#     "chromosome_name",
+#     "seqid"
+#   ),
+#   start.field = "start",
+#   end.field = c("end", "stop"),
+#   strand.field = "strand",
+#   starts.in.df.are.0based = FALSE
+# )
+
+annotatedPeaks <- annotatePeak(
+  # peakSet,
+  gr_narrowPeak,
+  tssRegion = c(-3000, 1000),
+  # tssRegion = c(-3000, 3000),
+  TxDb = txdb,
+  annoDb = "org.Mm.eg.db"
+)
+
+pdf(paste0( "../figure/Ikzf3_CnR_peaksNarrow_PieUpset2.pdf"), height = 3.5, width = 6.2)
+plotAnnoPie(annotatedPeaks)
+upsetplot(annotatedPeaks)
+dev.off()
+
+annotated_granges <- as.GRanges(annotatedPeaks)
+export(annotated_granges, "../output/annotated_Ikzf3_peak_set_narrow.gtf", format = "GTF")
+
+readr::write_csv(as.data.frame(annotatedPeaks), "../output/annotated_Ikzf3_peak_set_narrow.csv")
+
+```
+
+
+"verbose =1 : Print immediate results on screen.
+genome = Hsapiens : specify the genome.
+We also describe two important parameters:
+P-Value cutoff: 
+- The P-Value cutoff controls the number of binding site in a motif. By default, the P-value cutoff is : 0.0002
+- E-Value cutoff: The E-Value cutoff controls the number of motifs to be identified. By default, the E-value cutoff is : 0.0"
+
+```{r}
+# order the peaks by qvalue, and take top 250 peaks
+peakSet <-  peakSet[order(peakSet$`-log10qvalue`), ]
+peakSet2 <-  head(peakSet, n = 500)
+
+gr_narrowPeak2 <- reduce(gr_narrowPeak2)
+
+gr_narrowPeak_resized <- resize(gr_narrowPeak2, width = 50, fix='center')
+
+library(rGADEM)
+library(BSgenome.Mmusculus.UCSC.mm10)
+
+mm <-  getSeq(Mmusculus, seqnames(gr_narrowPeak_resized))
+
+gadem <-
+  GADEM(
+    peakSet,
+    verbose = 1,
+    genome = Mmusculus,
+    seed = 1,
+    nmotifs = 10
+  )
+```
+
+
+## Count reads to peaks
+Get TSS site co-ordinates & count ChIPseq reads to TSS sites:
+
+```{r}
+bamPath <- "/Users/mfor0011/Documents/data/Ikzf/Ikfz3_CnR/bam_files/"
+
+# Fetch mouse annotations
+# txdb <- TxDb.Mmusculus.UCSC.mm10.knownGene
+genes <- genes(txdb)
+# Get promoter sites and remove extra contigs
+tss_sites <- promoters(genes, upstream = 3000, downstream = 1000)
+wanted_chr <- seqlevels(tss_sites)[ !grepl(seqlevels(tss_sites), pattern = "_random")]
+wanted_chr <- wanted_chr[! grepl(wanted_chr, pattern = "Un_")]
+seqlevels(tss_sites, pruning.mode = "coarse") <- wanted_chr
+# Write to file
+export(tss_sites, "../data/tss_sites.bed", format = "BED")
+
+
+# Get gene annotations and remove extra contigs
+seqlevels(genes, pruning.mode = "coarse") <- wanted_chr
+genes <- sort(genes)
+# Write to file
+
+
+export(genes, "../data/mm10_ucsc_genes.gtf", format= "GTF")
+export(genes, "../data/mm10_ucsc_genes.bed", format= "BED")
+
+# On the terminal of the RStudio: Format the tss bed files into SAF format
+# cut -f4 ./data/tss_sites.bed | paste - ./data/tss_sites.bed | cut -f1,2,3,4,7 > ./data/tss_sites.saf
+
+### RUN the R code instead: Count reads to TSS sites with featureCounts
+# featureCounts -T 12 -p -F SAF -a ./data/tss_sites.saf -o ./output/counts_tss.txt /Users/mfor0011/Documents/data/Ikzf/Ikfz3_CnR/bam_files/AIOLOS_sorted_filtered_mdup.bam
+
+library(Rsubread)
+
+f <- featureCounts(
+  files = c(
+    paste0(bamPath, "AIOLOS_sorted_filtered_mdup.bam"),
+    paste0(bamPath, "NC_sorted_filtered_mdup.bam")
+  ),
+  annot.ext = "../data/tss_sites.saf",
+  isPairedEnd = T,
+  nthreads = 12
+)
+
+saveRDS(f , paste0(outPath, "Ikzf3_CnR_FeatureCounts_TSS.RDS"))
+```
+
+### DB analysis using limma
+```{r}
+## remove rows that are zero in both:
+cc0 <- f$counts
+cc <- cc0[rowSums(cc0 > 5) >= 1, ]
+
+# kp <- filterByExpr(cc0, group = c("Ikzf3", "control"))
+# cc <- cc0[kp, ]
+
+db <- edgeR::normalizeChIPtoInput(
+  input = cc[, "NC_sorted_filtered_mdup.bam"],
+  response = cc[, "AIOLOS_sorted_filtered_mdup.bam"],
+  plot = T
+)
+
+adjp <- p.adjust(p = db$p.value, method = "BH") 
+table(db$p.value < 0.05)
+table(adjp < 0.05)
+
+adjpData <- data.frame(adjp)
+adjpData <- adjpData[order(adjpData$adjp), , drop = F]
+
+adjpData$SYMBOL <-
+  mapIds(
+    org.Mm.eg.db,
+    key = rownames(adjpData),
+    keytype = "ENTREZID",
+    column = c("SYMBOL")
+  )
+
+adjpData$ENTREZID <- rownames(adjpData)
+
+write.table(adjpData, paste0(outPath, "Ikzf3_CnR_FeatureCount_edgeR_DB_stats_FiltCount5.txt"),
+            row.names = F, sep = "\t")
+
+# topDB <- head(adjpData, 1400)
+topDB <- adjpData[adjpData$adjp < 0.05, ]
+
+length(intersect(topDB$SYMBOL, sep$SYMBOL))    ## 461
+length(intersect(topDB$SYMBOL, csaw3$symbol))  ## 240
+
+```
+
+
+## Compare with Nextflow
+```{r}
+
+file_narrowPeak_nf = "/Users/mfor0011/Documents/data/Ikzf/Ikfz3_CnR/nexflow/ikfz3_results/bwa/mergedLibrary/macs/narrowPeak/Ikfz3_IP_R1_peaks.narrowPeak" 
+extraCols_narrowPeak_nf <- c(signalValue = "numeric", pValue = "numeric",
+                          qValue = "numeric", peak = "integer")
+
+gr_narrowPeak_nf <- import(file_narrowPeak_nf, format = "BED",
+                        extraCols = extraCols_narrowPeak_nf)
+
+seqlevels(gr_narrowPeak_nf) <- paste0("chr", seqlevels(gr_narrowPeak_nf))
+seqlevels(gr_narrowPeak_nf)[seqlevels(gr_narrowPeak_nf) == "chrMT" ] <- "chrM"
+
+annotatedPeaks_nf <- annotatePeak(
+  gr_narrowPeak_nf,
+  tssRegion = c(-3000, 1000),
+  TxDb = txdb,
+  annoDb = "org.Mm.eg.db"
+)
+
+
+pdf(
+  paste0("../figure/Ikzf3_CnR_peaksNarrow_PieUpset_nf.pdf"),
+  height = 3.5,
+  width = 6.2
+)
+plotAnnoPie(annotatedPeaks_nf)
+upsetplot(annotatedPeaks_nf)
+dev.off()
+
+annotated_granges_nf <- as.GRanges(annotatedPeaks_nf)
+# annotated_granges <- as.GRanges(annotatedPeaks)
+## 54 pairs
+readr::write_csv(as.data.frame(annotatedPeaks_nf), "../output/annotated_Ikzf3_peak_set_narrow_nf.csv")
+
+
+```
+
+## Compare with Galaxy
+
+```{r}
+# peakSetSeb <- import("/Users/mfor0011/Documents/data/Ikzf/Ikfz3_CnR/bam_galaxy_Seb/Galaxy38-[MACS2_callpeak_AIOLOS].bed")
+# s <- read.delim("/Users/mfor0011/Documents/data/Ikzf/Ikfz3_CnR/bam_galaxy_Seb/Galaxy38-[MACS2_callpeak_AIOLOS].bed", header = F)
+
+# peakSetSeb <- import("/Users/mfor0011/Documents/data/Ikzf/Ikfz3_CnR/bam_galaxy_Seb/Galaxy_Ikzf3.bed", format = "BED")
+
+file_narrowPeakSeb = "/Users/mfor0011/Documents/data/Ikzf/Ikfz3_CnR/bam_galaxy_Seb/Galaxy38-[MACS2_callpeak_AIOLOS].bed"
+
+extraCols_narrowPeakSeb <- c(signalValue = "numeric", pValue = "numeric",
+                          qValue = "numeric", peak = "integer")
+
+gr_narrowPeakSeb <- import(file_narrowPeakSeb, format = "BED",
+                        extraCols = extraCols_narrowPeakSeb)
+
+# On the terminal of the RStudio: Format the tss bed files into SAF format
+# cut -f1,2,3,4,8 /Users/mfor0011/Documents/data/Ikzf/Ikfz3_CnR/bam_galaxy_Seb/Galaxy38-[MACS2_callpeak_AIOLOS].bed > /Users/mfor0011/Documents/data/Ikzf/Ikfz3_CnR/bam_galaxy_Seb/Galaxy_Ikzf3.bed
+
+annotatedPeaksSeb <- annotatePeak(
+  gr_narrowPeakSeb,
+  tssRegion = c(-3000, 1000),
+  TxDb = txdb,
+  annoDb = "org.Mm.eg.db"
+)
+
+pdf(paste0( "../figure/Ikzf3_CnR_peaksGalaxy_PieUpset.pdf"), height = 3.5, width = 6.2)
+plotAnnoPie(annotatedPeaksSeb)
+upsetplot(annotatedPeaksSeb)
+dev.off()
+
+annotated_grangesSeb <- as.GRanges(annotatedPeaksSeb)
+export(annotated_grangesSeb, "../output/annotated_Ikzf3_peak_set_Galaxy.gtf", format = "GTF")
+
+readr::write_csv(as.data.frame(annotatedPeaksSeb), "../output/annotated_Ikzf3_peak_set_Galaxy.csv")
+```
+
+1202 common genes
+```{r}
+## 1404
+sep <- as.data.frame(annotatedPeaks)
+## 1398
+gal <- as.data.frame(annotatedPeaksSeb)
+
+nf <- as.data.frame(annotatedPeaks_nf)
+
+length(intersect(sep$SYMBOL, gal$SYMBOL)) ## 1202
+length(intersect(sep$SYMBOL, nf$SYMBOL))  ## 1138
+length(intersect(gal$SYMBOL, nf$SYMBOL))  ## 1115
+```
+
+
+## Coverage of bams
+```{r}
+#load library
+library(Rsamtools)
+
+#read in entire BAM file
+bam <- scanBam(paste0(bamPath, "AIOLOS_sorted_filtered_mdup.bam"))
+
+#names of the BAM fields
+names(bam[[1]])
+# [1] "qname"  "flag"   "rname"  "strand" "pos"    "qwidth" "mapq"   "cigar"
+# [9] "mrnm"   "mpos"   "isize"  "seq"    "qual"
+
+#distribution of BAM flags
+table(bam[[1]]$flag)
+#     83     99    147    163 
+# 841778 834539 834525 841801 
+
+#      0       4      16 
+#1472261  775200 1652949
+
+#function for collapsing the list of lists into a single list
+#as per the Rsamtools vignette
+.unlist <- function (x){
+   ## do.call(c, …) coerces factor to integer, which is undesired
+   x1 <- x[[1L]]
+   if (is.factor(x1)){
+      structure(unlist(x), class = "factor", levels = levels(x1))
+   } else {
+      do.call(c, x)
+   }
+}
+
+#store names of BAM fields
+bam_field <- names(bam[[1]])
+
+#go through each BAM field and unlist
+list <- lapply(bam_field, function(y) .unlist(lapply(bam, "[[", y)))
+
+#store as data frame
+bam_df <- do.call("DataFrame", list)
+names(bam_df) <- bam_field
+
+dim(bam_df)
+# 3352643      13
+
+# saveRDS(bam_df, paste0(outPath, "Ikzf3_CnR_bam_DataFrame.RDS"))
+```
+
+```{r}
+#use chr11 as an example
+#how many entries on the negative strand of chr11?
+table(bam_df$rname == 'chr11')
+# FALSE    TRUE 
+#3875997   24413
+
+#function for checking negative strand
+check_neg <- function(x){
+  if (intToBits(x)[5] == 1){
+    return(T)
+  } else {
+    return(F)
+  }
+}
+
+#test neg function with subset of chr11
+test <- subset(bam_df, rname == 'chr11')
+dim(test)
+#[1]178108     13
+table(apply(as.data.frame(test$flag), 1, check_neg))
+#number same as above
+#FALSE  TRUE 
+# 89053 89055 
+
+#function for checking positive strand
+check_pos <- function(x){
+  if (intToBits(x)[3] == 1){
+    return(F)
+  } else if (intToBits(x)[5] != 1){
+    return(T)
+  } else {
+    return(F)
+  }
+}
+
+#check pos function
+table(apply(as.data.frame(test$flag), 1, check_pos))
+#looks OK
+#FALSE  TRUE 
+# 89055 89053 
+
+# store the mapped positions on the plus and minus strands
+chr11_neg <- bam_df[bam_df$rname == 'chr11' &
+                    apply(as.data.frame(bam_df$flag), 1, check_neg),
+                    'pos'
+                   ]
+length(chr11_neg)
+#[1] 89055
+chr11_pos <- bam_df[bam_df$rname == 'chr11' &
+                    apply(as.data.frame(bam_df$flag), 1, check_pos),
+                    'pos'
+                   ]
+length(chr11_pos)
+#[1] 32013
+ 
+#calculate the densities
+chr11_neg_density <- density(chr11_neg)
+chr11_pos_density <- density(chr11_pos)
+ 
+#display the negative strand with negative values
+chr11_neg_density$y <- chr11_neg_density$y * -1
+ 
+plot(chr11_pos_density,
+     ylim = range(c(chr11_neg_density$y, chr11_pos_density$y)),
+     main = "Coverage plot of Cut & Run reads for Chr 11",
+     xlab = "Chromosome 11",
+     col = 'blue',
+     lwd=2.5)
+lines(chr11_neg_density, lwd=2.5, col = 'red')
+
+#say I am interested in region 31480000 to 39080000
+
+lower <- 98464902
+upper <- 98546031
+ 
+chr11_pos_interest <- chr11_pos[chr11_pos > lower & chr11_pos < upper]
+#check how many entries we have
+length(chr11_pos_interest)
+#[1] 16220
+ 
+#do the same for the negative strand
+chr11_neg_interest <- chr11_neg[chr11_neg > lower & chr11_neg < upper]
+length(chr11_neg_interest)
+#[1] 7744
+ 
+#now continue with the code above
+#but with our two new vectors of interest
+chr11_neg_density <- density(chr11_neg_interest)
+chr11_pos_density <- density(chr11_pos_interest)
+  
+#display the negative strand with negative values
+chr11_neg_density$y <- chr11_neg_density$y * -1
+  
+plot(chr11_pos_density,
+     ylim = range(c(chr11_neg_density$y, chr11_pos_density$y)),
+     main = "Coverage plot",
+     xlab = "Chromosome 11, Ikzf3",
+     col = 'blue',
+     lwd=2.5,
+     type='h'
+)
+lines(chr11_neg_density, lwd=2.5, col = 'red', type='h')
+```
+
